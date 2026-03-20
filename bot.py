@@ -232,9 +232,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def webhook():
     update = Update.de_json(request.get_json(force=True), app.bot)
 
+    async def process():
+        await app.process_update(update)
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(app.process_update(update))
+    loop.run_until_complete(process())
     loop.close()
 
     return "ok"
@@ -248,6 +251,13 @@ def home():
 if __name__ == "__main__":
     import requests
 
+    # Initialize bot ONCE
+    async def init():
+        await app.initialize()
+
+    asyncio.run(init())
+
+    # Set webhook
     requests.get(
         f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={WEBHOOK_URL}/{TOKEN}"
     )
@@ -256,4 +266,5 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(MessageHandler(~filters.COMMAND, handle_message))
 
-    flask_app.run(host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    flask_app.run(host="0.0.0.0", port=port)
