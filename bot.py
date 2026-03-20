@@ -117,7 +117,7 @@ async def show_subjects(update, context):
         ]
 
     keyboard.append(["⬅ Back", "🏠 Main Menu"])
-
+    context.user_data["last"] = "class"
     await update.message.reply_text(
         f"{cls} Subjects",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -139,7 +139,7 @@ async def show_materials(update, context):
 
     keyboard.append(["⬅ Back", "🏠 Main Menu"])
 
-    context.user_data["last"] = "class"
+    context.user_data["last"] = "subject"
 
     await update.message.reply_text(
         context.user_data.get("subject"),
@@ -214,10 +214,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if last == "main":
             await start(update, context)
-        elif last == "subject":
-            await show_subjects(update, context)
         elif last == "class":
+            await start(update, context)
+        elif last == "subjects":
             await show_subjects(update, context)
+        elif last == "subject":
+            await show_materials(update, context)
         else:
             await start(update, context)
         return
@@ -361,7 +363,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ====== SUBJECT SELECT =====
     if text in ["SCIENCE 🧪","MATHEMATICS 📐","ECONOMICS 💳","HISTORY 🏆","POL. SCIENCE 👮","GEOGRAPHY 🌍","ENGLISH 📄","PHYSICS ⚛️","CHEMISTRY 🧪","BIOLOGY 🌱","MATHS 📐"]:
         context.user_data["subject"] = text
-        context.user_data["last"] = "subject"
+        context.user_data["last"] = "subjects"
         await show_materials(update, context)   
 
 # ================= MAIN =================
