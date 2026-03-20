@@ -46,7 +46,6 @@ async def expire_chat(user_id, context):
 
         try:
             await context.bot.send_message(user_id, "Session expired.")
-
             await context.bot.send_message(
                 user_id,
                 "Select your class:",
@@ -154,20 +153,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text or ""
 
-    # ===== BACK BUTTON FIXED =====
+    # ===== BACK =====
     if text == "⬅ Back":
-
-        if "subject" in context.user_data:
-            context.user_data.pop("subject", None)
-            await show_subjects(update, context)
-
-        elif "class" in context.user_data:
-            context.user_data.clear()
-            await start(update, context)
-
-        else:
-            await start(update, context)
-
+        context.user_data.clear()
+        await start(update, context)
         return
 
     # ===== MAIN MENU =====
@@ -247,40 +236,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ===== ADMIN PANEL =====
+    # ===== ADMIN PANEL WITH CONFIRM =====
     if user_id == ADMIN_ID:
 
+        # Start send mode
         if text == "📩 Send Message":
-            context.user_data["mode"] = "send"
-            await update.message.reply_text("Send message now:")
+            context.user_data["mode"] = "preview"
+            await update.message.reply_text("Send message to preview.")
             return
 
-        if context.user_data.get("mode") == "send":
+        # Preview step
+        if context.user_data.get("mode") == "preview":
 
-            msg = update.message
+            context.user_data["preview_msg"] = update.message
 
-            try:
-                if msg.text:
-                    sent = await context.bot.send_message(TARGET_USER_ID, msg.text)
-                elif msg.photo:
-                    sent = await context.bot.send_photo(TARGET_USER_ID, msg.photo[-1].file_id, caption=msg.caption)
-                elif msg.document:
-                    sent = await context.bot.send_document(TARGET_USER_ID, msg.document.file_id, caption=msg.caption)
-                elif msg.video:
-                    sent = await context.bot.send_video(TARGET_USER_ID, msg.video.file_id, caption=msg.caption)
-                elif msg.audio:
-                    sent = await context.bot.send_audio(TARGET_USER_ID, msg.audio.file_id, caption=msg.caption)
-                else:
-                    return
+            keyboard = [["✅ Confirm", "❌ Cancel"]]
 
-                chat_messages.setdefault(TARGET_USER_ID, []).append((None, sent.message_id))
+            await update.message.reply_text(
+                "Preview ready. Confirm?",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
 
-                await update.message.reply_text("Message sent")
-
-            except:
-                await update.message.reply_text("Failed")
-
+            context.user_data["mode"] = "confirm"
             return
+
+        # Confirm step
+        if context.user_data.get("mode") == "confirm":
+
+            if text == "❌ Cancel":
+                context.user_data.clear()
+                await update.message.reply_text("Cancelled.")
+                return
+
+            if text == "✅ Confirm":
+
+                msg = context.user_data.get("preview_msg")
+
+                try:
+                    if msg.text:
+                        sent = await context.bot.send_message(TARGET_USER_ID, msg.text)
+                    elif msg.photo:
+                        sent = await context.bot.send_photo(TARGET_USER_ID, msg.photo[-1].file_id, caption=msg.caption)
+                    elif msg.document:
+                        sent = await context.bot.send_document(TARGET_USER_ID, msg.document.file_id, caption=msg.caption)
+                    elif msg.video:
+                        sent = await context.bot.send_video(TARGET_USER_ID, msg.video.file_id, caption=msg.caption)
+                    elif msg.audio:
+                        sent = await context.bot.send_audio(TARGET_USER_ID, msg.audio.file_id, caption=msg.caption)
+                    else:
+                        return
+
+                    chat_messages.setdefault(TARGET_USER_ID, []).append((None, sent.message_id))
+
+                    await update.message.reply_text("Message sent")
+
+                except:
+                    await update.message.reply_text("Failed")
+
+                context.user_data.clear()
+                return
 
     # ===== CLASS =====
     if text in ["Class 9th", "Class 10th", "Class 11th", "Class 12th"]:
