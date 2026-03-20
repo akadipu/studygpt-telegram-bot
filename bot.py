@@ -6,37 +6,32 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 8558716745
-DATA_FILE = "data.json"
+TARGET_USER_ID = 8071314699
 
 active_users = set()
 user_timers = {}
 chat_messages = {}
 
-# ================= DATA =================
-
-def load_data():
-    try:
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-# ================= CHAT CLEAN =================
+# ================= DELETE SYSTEM =================
 
 async def clear_all_chat(user_id, context):
     for u_msg, a_msg in chat_messages.get(user_id, []):
-        try:
-            await context.bot.delete_message(user_id, u_msg)
-        except:
-            pass
-        try:
-            await context.bot.delete_message(ADMIN_ID, a_msg)
-        except:
-            pass
+
+        if u_msg:
+            try:
+                await context.bot.delete_message(user_id, u_msg)
+            except:
+                pass
+
+        if a_msg:
+            try:
+                await context.bot.delete_message(ADMIN_ID, a_msg)
+            except:
+                pass
+            try:
+                await context.bot.delete_message(user_id, a_msg)
+            except:
+                pass
 
     chat_messages[user_id] = []
 
@@ -51,9 +46,10 @@ async def expire_chat(user_id, context):
 
         try:
             await context.bot.send_message(user_id, "Session expired.")
+
             await context.bot.send_message(
                 user_id,
-                "Choose your class:",
+                "Select your class:",
                 reply_markup=ReplyKeyboardMarkup(
                     [["Class 9th", "Class 10th"],
                      ["Class 11th", "Class 12th"],
@@ -85,14 +81,16 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = [
-        ["➕ Add Material", "✏️ Edit/Delete"],
         ["📩 Send Message"],
         ["⬅ Back"]
     ]
 
-    await update.message.reply_text("Admin Panel", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    await update.message.reply_text(
+        "Admin Panel",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
 
-# ================= SUBJECTS =================
+# ================= SUBJECT =================
 
 async def show_subjects(update, context):
     cls = context.user_data.get("class")
@@ -113,9 +111,12 @@ async def show_subjects(update, context):
 
     keyboard.append(["⬅ Back", "🏠 Main Menu"])
 
-    await update.message.reply_text(f"{cls} Subjects", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    await update.message.reply_text(
+        f"{cls} Subjects",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
 
-# ================= MATERIAL MENU =================
+# ================= MATERIAL =================
 
 async def show_materials(update, context):
     subject = context.user_data.get("subject")
@@ -147,21 +148,26 @@ async def show_materials(update, context):
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
-# ================= MAIN HANDLER =================
+# ================= MAIN =================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text or ""
 
-    data = load_data()
-
-    # ===== BACK =====
+    # ===== BACK BUTTON FIXED =====
     if text == "⬅ Back":
+
         if "subject" in context.user_data:
             context.user_data.pop("subject", None)
             await show_subjects(update, context)
+
+        elif "class" in context.user_data:
+            context.user_data.clear()
+            await start(update, context)
+
         else:
             await start(update, context)
+
         return
 
     # ===== MAIN MENU =====
@@ -176,7 +182,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [["🧹 Clear History", "❌ End Chat"]]
 
         await update.message.reply_text(
-            "Support chat started. Send your message.",
+            "Support chat started.",
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
 
@@ -236,33 +242,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             return
 
-        chat_messages.setdefault(user_id, []).append((update.message.message_id, admin_msg.message_id))
-        context.bot_data[admin_msg.message_id] = user_id
+        chat_messages.setdefault(user_id, []).append(
+            (update.message.message_id, admin_msg.message_id)
+        )
         return
 
-    # ===== ADMIN REPLY =====
-    if user_id == ADMIN_ID and update.message.reply_to_message:
-        replied = update.message.reply_to_message.message_id
-        target = context.bot_data.get(replied)
+    # ===== ADMIN PANEL =====
+    if user_id == ADMIN_ID:
 
-        if target:
+        if text == "📩 Send Message":
+            context.user_data["mode"] = "send"
+            await update.message.reply_text("Send message now:")
+            return
+
+        if context.user_data.get("mode") == "send":
+
             msg = update.message
 
-            if msg.text:
-                sent = await context.bot.send_message(target, msg.text)
-            elif msg.photo:
-                sent = await context.bot.send_photo(target, msg.photo[-1].file_id, caption=msg.caption)
-            elif msg.document:
-                sent = await context.bot.send_document(target, msg.document.file_id, caption=msg.caption)
-            elif msg.video:
-                sent = await context.bot.send_video(target, msg.video.file_id, caption=msg.caption)
-            elif msg.audio:
-                sent = await context.bot.send_audio(target, msg.audio.file_id, caption=msg.caption)
-            else:
-                return
+            try:
+                if msg.text:
+                    sent = await context.bot.send_message(TARGET_USER_ID, msg.text)
+                elif msg.photo:
+                    sent = await context.bot.send_photo(TARGET_USER_ID, msg.photo[-1].file_id, caption=msg.caption)
+                elif msg.document:
+                    sent = await context.bot.send_document(TARGET_USER_ID, msg.document.file_id, caption=msg.caption)
+                elif msg.video:
+                    sent = await context.bot.send_video(TARGET_USER_ID, msg.video.file_id, caption=msg.caption)
+                elif msg.audio:
+                    sent = await context.bot.send_audio(TARGET_USER_ID, msg.audio.file_id, caption=msg.caption)
+                else:
+                    return
 
-            chat_messages.setdefault(target, []).append((sent.message_id, update.message.message_id))
-        return
+                chat_messages.setdefault(TARGET_USER_ID, []).append((None, sent.message_id))
+
+                await update.message.reply_text("Message sent")
+
+            except:
+                await update.message.reply_text("Failed")
+
+            return
 
     # ===== CLASS =====
     if text in ["Class 9th", "Class 10th", "Class 11th", "Class 12th"]:
