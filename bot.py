@@ -67,6 +67,48 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
+# ================= SUBJECT MENU =================
+
+async def show_subjects(update, context):
+    cls = context.user_data.get("class")
+
+    if cls == "Class 9th":
+        keyboard = [
+            ["SCIENCE 🧪", "MATHEMATICS 📐"],
+            ["ECONOMICS 💳", "HISTORY 🏆"],
+            ["POL. SCIENCE 👮", "GEOGRAPHY 🌍"],
+            ["ENGLISH 📄"]
+        ]
+
+    elif cls == "Class 10th":
+        keyboard = [
+            ["SCIENCE 🧪", "MATHEMATICS 📐"],
+            ["ECONOMICS 💳", "HISTORY 🏆"],
+            ["POL. SCIENCE 👮", "GEOGRAPHY 🌍"],
+            ["ENGLISH 📄"]
+        ]
+
+    elif cls == "Class 11th":
+        keyboard = [
+            ["PHYSICS ⚛️", "CHEMISTRY 🧪"],
+            ["BIOLOGY 🌱", "MATHS 📐"],
+            ["ENGLISH 📄"]
+        ]
+
+    else:  # Class 12th
+        keyboard = [
+            ["PHYSICS ⚛️", "CHEMISTRY 🧪"],
+            ["BIOLOGY 🌱", "MATHS 📐"],
+            ["ENGLISH 📄"]
+        ]
+
+    keyboard.append(["⬅ Back", "🏠 Main Menu"])
+
+    await update.message.reply_text(
+        f"{cls} Subjects",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+
 # ================= HANDLER =================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,8 +128,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if last == "main":
             await start(update, context)
         elif last == "class":
-            await show_classes(update, context)
-        elif last == "subject":
             await show_subjects(update, context)
         else:
             await start(update, context)
@@ -143,7 +183,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif context.user_data.get("admin_step") == "class":
             context.user_data["class"] = text
             context.user_data["admin_step"] = "subject"
-
             await show_subjects(update, context)
             return
 
@@ -153,7 +192,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             cls = context.user_data["class"]
 
-            if cls == "Class 9th" or cls == "Class 11th":
+            if cls in ["Class 9th", "Class 11th"]:
                 keyboard = [
                     ["Lectures 📚", "Handwritten Notes 📝"],
                     ["NCERT Exercises ✍️", "Mindmaps 🤩"]
@@ -191,7 +230,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data["categories"].setdefault(key, []).append({"text": text})
             save_data(data)
 
-            await update.message.reply_text("✅ Added")
+            await update.message.reply_text("✅ Material Added")
             context.user_data.clear()
             return
 
@@ -244,7 +283,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
 
-    # ===== FETCH DATA =====
+    # ===== FETCH =====
     elif text in [
         "Lectures 📚", "Lectures 🎥",
         "Handwritten Notes 📝",
@@ -264,43 +303,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         for item in materials:
             await update.message.reply_text(item["text"])
-
-# ================= SUBJECT MENU =================
-
-async def show_subjects(update, context):
-    cls = context.user_data.get("class")
-
-    if cls == "Class 9th":
-        keyboard = [["SCIENCE 🧪", "MATHEMATICS 📐"]]
-
-    elif cls == "Class 10th":
-        keyboard = [
-            ["SCIENCE 🧪", "MATHEMATICS 📐"],
-            ["ECONOMICS 💳", "HISTORY 🏆"],
-            ["POL. SCIENCE 👮", "GEOGRAPHY 🌍"],
-            ["ENGLISH 📄"]
-        ]
-
-    elif cls == "Class 11th":
-        keyboard = [
-            ["PHYSICS ⚛️", "CHEMISTRY 🧪"],
-            ["BIOLOGY 🌱", "MATHS 📐"],
-            ["ENGLISH 📄"]
-        ]
-
-    else:
-        keyboard = [
-            ["PHYSICS ⚛️", "CHEMISTRY 🧪"],
-            ["BIOLOGY 🌱", "MATHS 📐"],
-            ["ENGLISH 📄"]
-        ]
-
-    keyboard.append(["⬅ Back", "🏠 Main Menu"])
-
-    await update.message.reply_text(
-        f"{cls} Subjects",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    )
 
 # ================= MAIN =================
 
