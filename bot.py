@@ -50,7 +50,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await update.message.reply_text(
-        "Choose your class 👇",
+        "🚀 StudyGPT: Ace your exams with Handwritten Notes, Mindmaps, and Solved PYQs! 🎓/n /nChoose your class 👇",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
