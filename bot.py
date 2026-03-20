@@ -1,6 +1,5 @@
 import os
 import json
-import asyncio
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -10,10 +9,6 @@ from telegram.ext import (
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 8558716745
 DATA_FILE = "data.json"
-
-active_users = set()
-user_timers = {}
-chat_messages = {}
 
 # ================= DATA =================
 
@@ -28,55 +23,16 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-# ================= SESSION =================
-
-async def expire_chat(user_id, context):
-    await asyncio.sleep(180)
-
-    if user_id in active_users:
-        active_users.discard(user_id)
-
-        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
-            try:
-                await context.bot.delete_message(user_id, user_msg_id)
-            except:
-                pass
-            try:
-                await context.bot.delete_message(ADMIN_ID, admin_msg_id)
-            except:
-                pass
-
-        chat_messages[user_id] = []
-
-        try:
-            await context.bot.send_message(user_id, "Session expired & chat cleared.")
-            await asyncio.sleep(1)
-            await context.bot.send_message(
-                user_id,
-                "🚀 StudyGPT: Ace your exams with Handwritten Notes, Mindmaps, and Solved PYQs!\n\nChoose your class 👇",
-                reply_markup=ReplyKeyboardMarkup(
-                    [["Class 9th", "Class 10th"],
-                     ["Class 11th", "Class 12th"],
-                     ["📞 Contact Us"]],
-                    resize_keyboard=True
-                )
-            )
-        except:
-            pass
-
 # ================= START =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-
     keyboard = [
         ["Class 9th", "Class 10th"],
-        ["Class 11th", "Class 12th"],
-        ["📞 Contact Us"]
+        ["Class 11th", "Class 12th"]
     ]
 
     await update.message.reply_text(
-        "🚀 StudyGPT: Ace your exams with Handwritten Notes, Mindmaps, and Solved PYQs!\n\nChoose your class 👇",
+        "🚀 StudyGPT: Ace your exams with Notes & PYQs!\n\nChoose your class 👇",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
@@ -86,36 +42,14 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return
 
-    keyboard = [["➕ Add Material"]]
+    keyboard = [
+        ["➕ Add Material"],
+        ["✏️ Edit Material"],
+        ["❌ Delete Material"]
+    ]
 
     await update.message.reply_text(
-        "Admin Panel 👨‍💻",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    )
-
-# ================= SUBJECT MENU =================
-
-async def show_subjects(update, context):
-    cls = context.user_data.get("class")
-
-    if cls in ["Class 9th", "Class 10th"]:
-        keyboard = [
-            ["SCIENCE 🧪", "MATHEMATICS 📐"],
-            ["ECONOMICS 💳", "HISTORY 🏆"],
-            ["POL. SCIENCE 👮", "GEOGRAPHY 🌍"],
-            ["ENGLISH 📄"]
-        ]
-    else:
-        keyboard = [
-            ["PHYSICS ⚛️", "CHEMISTRY 🧪"],
-            ["BIOLOGY 🌱", "MATHS 📐"],
-            ["ENGLISH 📄"]
-        ]
-
-    keyboard.append(["⬅ Back", "🏠 Main Menu"])
-
-    await update.message.reply_text(
-        f"{cls} Subjects",
+        "Admin Panel",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
@@ -123,188 +57,140 @@ async def show_subjects(update, context):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    text = update.message.text if update.message.text else ""
-
+    text = update.message.text
     data = load_data()
 
-    # ===== ADMIN REPLY SYSTEM =====
-    if user_id == ADMIN_ID and update.message.reply_to_message:
-        replied_msg_id = update.message.reply_to_message.message_id
-        target_user = context.bot_data.get(replied_msg_id)
+    # ================= ADMIN =================
+    if user_id == ADMIN_ID:
 
-        if target_user:
-            msg = update.message
-
-            if msg.text:
-                sent = await context.bot.send_message(target_user, msg.text)
-
-            elif msg.photo:
-                sent = await context.bot.send_photo(
-                    target_user,
-                    photo=msg.photo[-1].file_id,
-                    caption=msg.caption
-                )
-
-            elif msg.video:
-                sent = await context.bot.send_video(
-                    target_user,
-                    video=msg.video.file_id,
-                    caption=msg.caption
-                )
-
-            elif msg.document:
-                sent = await context.bot.send_document(
-                    target_user,
-                    document=msg.document.file_id,
-                    caption=msg.caption
-                )
-
-            elif msg.audio:
-                sent = await context.bot.send_audio(
-                    target_user,
-                    audio=msg.audio.file_id,
-                    caption=msg.caption
-                )
-
-            else:
-                return
-
-            # 🔥 TRACK ADMIN REPLY
-            chat_messages.setdefault(target_user, []).append(
-                (sent.message_id, update.message.message_id)
-            )
-
+        if text == "➕ Add Material":
+            context.user_data["step"] = "add_class"
+            await update.message.reply_text("Enter Class:")
             return
 
-    # ===== MAIN MENU =====
-    if text == "🏠 Main Menu":
-        await start(update, context)
-        return
-
-    # ===== BACK =====
-    if text == "⬅ Back":
-        last = context.user_data.get("last")
-
-        if last == "main":
-            await start(update, context)
-        elif last == "class":
-            await show_subjects(update, context)
-        else:
-            await start(update, context)
-        return
-
-    # ===== CONTACT =====
-    if text == "📞 Contact Us":
-        active_users.add(user_id)
-
-        keyboard = [["🧹 Clear History", "❌ End Chat"]]
-
-        await update.message.reply_text(
-            "StudyGPT Support Team:\n\n💬 Need help? Send your message here and our team will get back to you directly! 🚀",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-
-        if user_id in user_timers:
-            user_timers[user_id].cancel()
-
-        user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
-        return
-
-    # ===== CLEAR HISTORY =====
-    if text == "🧹 Clear History" and user_id in active_users:
-        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
-            try:
-                await context.bot.delete_message(user_id, user_msg_id)
-            except:
-                pass
-            try:
-                await context.bot.delete_message(ADMIN_ID, admin_msg_id)
-            except:
-                pass
-
-        chat_messages[user_id] = []
-        await update.message.reply_text("🧹 History cleared!")
-        return
-
-    # ===== END CHAT =====
-    if text == "❌ End Chat" and user_id in active_users:
-
-        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
-            try:
-                await context.bot.delete_message(user_id, user_msg_id)
-            except:
-                pass
-            try:
-                await context.bot.delete_message(ADMIN_ID, admin_msg_id)
-            except:
-                pass
-
-        chat_messages[user_id] = []
-        active_users.discard(user_id)
-
-        await update.message.reply_text("Chat ended & history cleared.")
-        await asyncio.sleep(1)
-        await start(update, context)
-        return
-
-    # ===== CHAT (MEDIA + TEXT) =====
-    if user_id in active_users:
-
-        if user_id in user_timers:
-            user_timers[user_id].cancel()
-
-        user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
-
-        user = update.message
-        sender = update.message.from_user
-        caption = f"{sender.first_name}\n🆔 {sender.id}"
-
-        if user.text:
-            admin_msg = await context.bot.send_message(
-                ADMIN_ID,
-                f"{caption}\n\n{user.text}"
-            )
-        elif user.photo:
-            admin_msg = await context.bot.send_photo(
-                ADMIN_ID,
-                photo=user.photo[-1].file_id,
-                caption=caption
-            )
-        elif user.video:
-            admin_msg = await context.bot.send_video(
-                ADMIN_ID,
-                video=user.video.file_id,
-                caption=caption
-            )
-        elif user.document:
-            admin_msg = await context.bot.send_document(
-                ADMIN_ID,
-                document=user.document.file_id,
-                caption=caption
-            )
-        elif user.audio:
-            admin_msg = await context.bot.send_audio(
-                ADMIN_ID,
-                audio=user.audio.file_id,
-                caption=caption
-            )
-        else:
+        elif context.user_data.get("step") == "add_class":
+            context.user_data["class"] = text
+            context.user_data["step"] = "add_subject"
+            await update.message.reply_text("Enter Subject:")
             return
 
-        chat_messages.setdefault(user_id, []).append(
-            (update.message.message_id, admin_msg.message_id)
-        )
+        elif context.user_data.get("step") == "add_subject":
+            context.user_data["subject"] = text
+            context.user_data["step"] = "add_type"
+            await update.message.reply_text("Enter Type:")
+            return
 
-        # 🔥 MAP ADMIN MESSAGE → USER
-        context.bot_data[admin_msg.message_id] = user_id
+        elif context.user_data.get("step") == "add_type":
+            context.user_data["type"] = text
+            context.user_data["step"] = "add_content"
+            await update.message.reply_text("Send Content:")
+            return
 
-        return
+        elif context.user_data.get("step") == "add_content":
+            key = f"{context.user_data['class']}|{context.user_data['subject']}|{context.user_data['type']}"
+            data["categories"].setdefault(key, []).append({"text": text})
+            save_data(data)
 
-    # ===== CLASS SELECT =====
+            await update.message.reply_text("✅ Added")
+            context.user_data.clear()
+            return
+
+        # DELETE
+        if text == "❌ Delete Material":
+            keys = list(data["categories"].keys())
+            msg = "\n".join([f"{i+1}. {k}" for i, k in enumerate(keys)])
+            context.user_data["keys"] = keys
+            context.user_data["step"] = "delete"
+            await update.message.reply_text(f"Select:\n{msg}")
+            return
+
+        elif context.user_data.get("step") == "delete":
+            try:
+                key = context.user_data["keys"][int(text)-1]
+                del data["categories"][key]
+                save_data(data)
+                await update.message.reply_text("Deleted")
+            except:
+                await update.message.reply_text("Invalid")
+            context.user_data.clear()
+            return
+
+        # EDIT
+        if text == "✏️ Edit Material":
+            keys = list(data["categories"].keys())
+            msg = "\n".join([f"{i+1}. {k}" for i, k in enumerate(keys)])
+            context.user_data["keys"] = keys
+            context.user_data["step"] = "edit"
+            await update.message.reply_text(f"Select:\n{msg}")
+            return
+
+        elif context.user_data.get("step") == "edit":
+            try:
+                key = context.user_data["keys"][int(text)-1]
+                context.user_data["edit_key"] = key
+                context.user_data["step"] = "edit_content"
+                await update.message.reply_text("Send new content:")
+            except:
+                await update.message.reply_text("Invalid")
+            return
+
+        elif context.user_data.get("step") == "edit_content":
+            key = context.user_data["edit_key"]
+            data["categories"][key] = [{"text": text}]
+            save_data(data)
+            await update.message.reply_text("Updated")
+            context.user_data.clear()
+            return
+
+    # ================= USER FLOW =================
+
+    # Class selected
     if text in ["Class 9th", "Class 10th", "Class 11th", "Class 12th"]:
         context.user_data["class"] = text
-        context.user_data["last"] = "main"
-        await show_subjects(update, context)
+
+        keyboard = [
+            ["SCIENCE 🧪", "MATHS 📐"],
+            ["ENGLISH 📄"]
+        ]
+
+        await update.message.reply_text(
+            "Select Subject",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return
+
+    # Subject selected
+    elif "class" in context.user_data and "subject" not in context.user_data:
+        context.user_data["subject"] = text
+
+        keyboard = [
+            ["Notes", "PYQ"],
+            ["Back"]
+        ]
+
+        await update.message.reply_text(
+            "Select Type",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return
+
+    # Type selected → SHOW MATERIAL
+    elif "subject" in context.user_data:
+        cls = context.user_data["class"]
+        sub = context.user_data["subject"]
+        typ = text
+
+        key = f"{cls}|{sub}|{typ}"
+
+        materials = data["categories"].get(key)
+
+        if materials:
+            for item in materials:
+                await update.message.reply_text(item["text"])
+        else:
+            await update.message.reply_text("No material found ❌")
+
+        return
 
 # ================= MAIN =================
 
