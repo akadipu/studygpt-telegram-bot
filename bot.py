@@ -32,7 +32,7 @@ def save_data(data):
 # ================= SESSION =================
 
 async def expire_chat(user_id, context):
-    await asyncio.sleep(180)
+    await asyncio.sleep(120)
 
     if user_id in active_users:
         active_users.discard(user_id)
