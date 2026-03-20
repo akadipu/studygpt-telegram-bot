@@ -226,17 +226,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["class"] = text
         await show_subjects(user_id, text, context)
 
-# ================= ROUTES =================
+# ================= WEBHOOK =================
 
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), app.bot)
-    import asyncio
 
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-loop.run_until_complete(app.process_update(update))
-loop.close()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(app.process_update(update))
+    loop.close()
+
     return "ok"
 
 @flask_app.route("/")
@@ -248,7 +248,6 @@ def home():
 if __name__ == "__main__":
     import requests
 
-    # set webhook
     requests.get(
         f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={WEBHOOK_URL}/{TOKEN}"
     )
