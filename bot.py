@@ -136,35 +136,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = update.message
 
             if msg.text:
-                await context.bot.send_message(target_user, msg.text)
+                sent = await context.bot.send_message(target_user, msg.text)
 
             elif msg.photo:
-                await context.bot.send_photo(
+                sent = await context.bot.send_photo(
                     target_user,
                     photo=msg.photo[-1].file_id,
                     caption=msg.caption
                 )
 
             elif msg.video:
-                await context.bot.send_video(
+                sent = await context.bot.send_video(
                     target_user,
                     video=msg.video.file_id,
                     caption=msg.caption
                 )
 
             elif msg.document:
-                await context.bot.send_document(
+                sent = await context.bot.send_document(
                     target_user,
                     document=msg.document.file_id,
                     caption=msg.caption
                 )
 
             elif msg.audio:
-                await context.bot.send_audio(
+                sent = await context.bot.send_audio(
                     target_user,
                     audio=msg.audio.file_id,
                     caption=msg.caption
                 )
+
+            else:
+                return
+
+            # 🔥 TRACK ADMIN REPLY
+            chat_messages.setdefault(target_user, []).append(
+                (sent.message_id, update.message.message_id)
+            )
+
             return
 
     # ===== MAIN MENU =====
@@ -286,7 +295,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             (update.message.message_id, admin_msg.message_id)
         )
 
-        # 🔥 Map admin message → user
+        # 🔥 MAP ADMIN MESSAGE → USER
         context.bot_data[admin_msg.message_id] = user_id
 
         return
