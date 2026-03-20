@@ -139,7 +139,7 @@ async def show_materials(update, context):
 
     keyboard.append(["⬅ Back", "🏠 Main Menu"])
 
-    context.user_data["last"] = "material"
+    context.user_data["last"] = "class"
 
     await update.message.reply_text(
         context.user_data.get("subject"),
