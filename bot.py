@@ -415,7 +415,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_mode = context.user_data.get("admin_mode", "")
 
         # ── EXIT / PANEL ───────────────────────────────────────────────────────
-        if text in ("🛑 Exit to Panel", "🛑 Safe Exit", "🏠 Main Menu", "🚪 Exit Admin Mode"):
+        if text in ("🛑 Exit to Panel", "🛑 Safe Exit", "🚪 Exit Admin Mode"):
             admin_active_user = None
             context.user_data.clear()
             if text == "🚪 Exit Admin Mode":
@@ -425,6 +425,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 await msg.reply_text("Admin Panel 👨‍💻", reply_markup=admin_panel_keyboard())
+            return
+
+        if text == "🏠 Main Menu" and admin_mode:
+            # admin pressed Main Menu while inside an admin flow → back to panel
+            admin_active_user = None
+            context.user_data.clear()
+            await msg.reply_text("Admin Panel 👨‍💻", reply_markup=admin_panel_keyboard())
             return
 
         # ── LIVE CHAT CONTROLS ─────────────────────────────────────────────────
@@ -641,11 +648,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             return
 
-        # fallback: unknown input from admin — do nothing
-        return
-
     # ══════════════════════════════════════════════════════════════════════════
-    # ██████████████████████████  USER SIDE  ██████████████████████████████████
+    # ██████████  USER SIDE  (also reached by admin in user/study mode)  ███████
     # ══════════════════════════════════════════════════════════════════════════
 
     # ── GLOBAL NAVIGATION ─────────────────────────────────────────────────────
