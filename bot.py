@@ -214,6 +214,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if last == "main":
             await start(update, context)
+        elif last == "subject":
+            await show_subjects(update, context)
         elif last == "class":
             await show_subjects(update, context)
         else:
@@ -359,7 +361,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ====== SUBJECT SELECT =====
     if text in ["SCIENCE 🧪","MATHEMATICS 📐","ECONOMICS 💳","HISTORY 🏆","POL. SCIENCE 👮","GEOGRAPHY 🌍","ENGLISH 📄","PHYSICS ⚛️","CHEMISTRY 🧪","BIOLOGY 🌱","MATHS 📐"]:
         context.user_data["subject"] = text
-        context.user_data["last"] = "main"
+        context.user_data["last"] = "subject"
         await show_materials(update, context)   
 
 # ================= MAIN =================
