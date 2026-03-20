@@ -355,14 +355,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["class"] = text
         context.user_data["last"] = "main"
         await show_subjects(update, context)
-     if text in ["SCIENCE 🧪", "MATHEMATICS 📐", "ECONOMICS 💳", "HISTORY 🏆", 
-            "POL. SCIENCE 👮", "GEOGRAPHY 🌍", "ENGLISH 📄",
-            "PHYSICS ⚛️", "CHEMISTRY 🧪", "BIOLOGY 🌱", "MATHS 📐"]:
-         context.user_data["subject"] = text
-         context.user_data["last"] = "class"
-         await show_materials(update, context)      
-     
-     # ================= MAIN =================
+    # ====== SUBJECT SELECT =====
+    if text in ["SCIENCE 🧪","MATHEMATICS 📐","ECONOMICS 💳","HISTORY 🏆","POL. SCIENCE 👮","GEOGRAPHY 🌍","ENGLISH 📄","PHYSICS ⚛️","CHEMISTRY 🧪","BIOLOGY 🌱","MATHS 📐"]:
+        context.user_data["subject"] = text
+        context.user_data["last"] = "class"
+        await show_materials(update, context)
+    return
+
+# ================= MAIN =================
 
 app = ApplicationBuilder().token(TOKEN).build()
 
