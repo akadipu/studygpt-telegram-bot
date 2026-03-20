@@ -32,7 +32,7 @@ def save_data(data):
 # ================= SESSION =================
 
 async def expire_chat(user_id, context):
-    await asyncio.sleep(120)
+    await asyncio.sleep(180)
 
     if user_id in active_users:
         active_users.discard(user_id)
@@ -145,20 +145,7 @@ async def show_materials(update, context):
         context.user_data.get("subject"),
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
-    
-# ===== SUBJECT SELECT =====
-    subjects_9_10 = ["SCIENCE 🧪", "MATHEMATICS 📐", "ECONOMICS 💳",
-                 "HISTORY 🏆", "POL. SCIENCE 👮", "GEOGRAPHY 🌍", "ENGLISH 📄"]
 
-    subjects_11_12 = ["PHYSICS ⚛️", "CHEMISTRY 🧪",
-                  "BIOLOGY 🌱", "MATHS 📐", "ENGLISH 📄"]
-
-    if text in subjects_9_10 + subjects_11_12:
-        context.user_data["subject"] = text
-        context.user_data["last"] = "class"
-        await show_materials(update, context)
-        return
-    
 # ================= HANDLER =================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
