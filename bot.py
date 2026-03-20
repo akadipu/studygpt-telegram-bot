@@ -348,19 +348,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.text:
             await context.bot.send_message(TARGET_USER_ID, text)
         return
-
+    # ====== SUBJECT SELECT =====
+    if text in ["SCIENCE 🧪","MATHEMATICS 📐","ECONOMICS 💳","HISTORY 🏆","POL. SCIENCE 👮","GEOGRAPHY 🌍","ENGLISH 📄","PHYSICS ⚛️","CHEMISTRY 🧪","BIOLOGY 🌱","MATHS 📐"]:
+        context.user_data["subject"] = text
+        context.user_data["last"] = "subject"
+        await show_materials(update, context)
+    return
 
     # ===== CLASS SELECT =====
     if text in ["Class 9th", "Class 10th", "Class 11th", "Class 12th"]:
         context.user_data["class"] = text
         context.user_data["last"] = "main"
         await show_subjects(update, context)
-    # ====== SUBJECT SELECT =====
-    if text in ["SCIENCE 🧪","MATHEMATICS 📐","ECONOMICS 💳","HISTORY 🏆","POL. SCIENCE 👮","GEOGRAPHY 🌍","ENGLISH 📄","PHYSICS ⚛️","CHEMISTRY 🧪","BIOLOGY 🌱","MATHS 📐"]:
-        context.user_data["subject"] = text
-        context.user_data["last"] = "class"
-        await show_materials(update, context)
-    return
+    
 
 # ================= MAIN =================
 
