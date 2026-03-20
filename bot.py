@@ -9,7 +9,7 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("TOKEN")
-ADMIN_ID = "ADMIN_ID"
+ADMIN_ID = 8558716745
 DATA_FILE = "data.json"
 MAX_RECENT = 10
 
