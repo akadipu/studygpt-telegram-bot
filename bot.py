@@ -1,11 +1,16 @@
 import os
 import json
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 8558716745
 DATA_FILE = "data.json"
+
+active_users = set()
+user_timers = {}
+chat_messages = {}
 
 # ================= DATA =================
 
@@ -20,6 +25,45 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
+# ================= CHAT CLEAN =================
+
+async def clear_all_chat(user_id, context):
+    for u_msg, a_msg in chat_messages.get(user_id, []):
+        try:
+            await context.bot.delete_message(user_id, u_msg)
+        except:
+            pass
+        try:
+            await context.bot.delete_message(ADMIN_ID, a_msg)
+        except:
+            pass
+
+    chat_messages[user_id] = []
+
+# ================= TIMEOUT =================
+
+async def expire_chat(user_id, context):
+    await asyncio.sleep(180)
+
+    if user_id in active_users:
+        await clear_all_chat(user_id, context)
+        active_users.discard(user_id)
+
+        try:
+            await context.bot.send_message(user_id, "Session expired.")
+            await context.bot.send_message(
+                user_id,
+                "Choose your class:",
+                reply_markup=ReplyKeyboardMarkup(
+                    [["Class 9th", "Class 10th"],
+                     ["Class 11th", "Class 12th"],
+                     ["📞 Contact Us"]],
+                    resize_keyboard=True
+                )
+            )
+        except:
+            pass
+
 # ================= START =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -28,12 +72,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ["Class 11th", "Class 12th"],
         ["📞 Contact Us"]
     ]
+
     await update.message.reply_text(
         "Select your class:",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
-# ================= ADMIN PANEL =================
+# ================= ADMIN =================
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -68,10 +113,7 @@ async def show_subjects(update, context):
 
     keyboard.append(["⬅ Back", "🏠 Main Menu"])
 
-    await update.message.reply_text(
-        f"{cls} Subjects",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    )
+    await update.message.reply_text(f"{cls} Subjects", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
 
 # ================= MATERIAL MENU =================
 
@@ -113,160 +155,130 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = load_data()
 
+    # ===== BACK =====
+    if text == "⬅ Back":
+        if "subject" in context.user_data:
+            context.user_data.pop("subject", None)
+            await show_subjects(update, context)
+        else:
+            await start(update, context)
+        return
+
     # ===== MAIN MENU =====
     if text == "🏠 Main Menu":
         await start(update, context)
         return
 
-    # ===== CLASS SELECT =====
+    # ===== CONTACT =====
+    if text == "📞 Contact Us":
+        active_users.add(user_id)
+
+        keyboard = [["🧹 Clear History", "❌ End Chat"]]
+
+        await update.message.reply_text(
+            "Support chat started. Send your message.",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+
+        if user_id in user_timers:
+            user_timers[user_id].cancel()
+
+        user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
+        return
+
+    # ===== CLEAR HISTORY =====
+    if text == "🧹 Clear History" and user_id in active_users:
+        await clear_all_chat(user_id, context)
+
+        if user_id in user_timers:
+            user_timers[user_id].cancel()
+
+        active_users.discard(user_id)
+
+        await update.message.reply_text("Chat cleared.")
+        await start(update, context)
+        return
+
+    # ===== END CHAT =====
+    if text == "❌ End Chat" and user_id in active_users:
+        await clear_all_chat(user_id, context)
+
+        if user_id in user_timers:
+            user_timers[user_id].cancel()
+
+        active_users.discard(user_id)
+
+        await update.message.reply_text("Chat ended.")
+        await start(update, context)
+        return
+
+    # ===== USER CHAT =====
+    if user_id in active_users:
+
+        if user_id in user_timers:
+            user_timers[user_id].cancel()
+
+        user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
+
+        sender = update.message.from_user
+        caption = f"{sender.first_name} ({sender.id})"
+
+        if update.message.text:
+            admin_msg = await context.bot.send_message(ADMIN_ID, f"{caption}\n\n{text}")
+        elif update.message.photo:
+            admin_msg = await context.bot.send_photo(ADMIN_ID, update.message.photo[-1].file_id, caption=caption)
+        elif update.message.document:
+            admin_msg = await context.bot.send_document(ADMIN_ID, update.message.document.file_id, caption=caption)
+        elif update.message.video:
+            admin_msg = await context.bot.send_video(ADMIN_ID, update.message.video.file_id, caption=caption)
+        elif update.message.audio:
+            admin_msg = await context.bot.send_audio(ADMIN_ID, update.message.audio.file_id, caption=caption)
+        else:
+            return
+
+        chat_messages.setdefault(user_id, []).append((update.message.message_id, admin_msg.message_id))
+        context.bot_data[admin_msg.message_id] = user_id
+        return
+
+    # ===== ADMIN REPLY =====
+    if user_id == ADMIN_ID and update.message.reply_to_message:
+        replied = update.message.reply_to_message.message_id
+        target = context.bot_data.get(replied)
+
+        if target:
+            msg = update.message
+
+            if msg.text:
+                sent = await context.bot.send_message(target, msg.text)
+            elif msg.photo:
+                sent = await context.bot.send_photo(target, msg.photo[-1].file_id, caption=msg.caption)
+            elif msg.document:
+                sent = await context.bot.send_document(target, msg.document.file_id, caption=msg.caption)
+            elif msg.video:
+                sent = await context.bot.send_video(target, msg.video.file_id, caption=msg.caption)
+            elif msg.audio:
+                sent = await context.bot.send_audio(target, msg.audio.file_id, caption=msg.caption)
+            else:
+                return
+
+            chat_messages.setdefault(target, []).append((sent.message_id, update.message.message_id))
+        return
+
+    # ===== CLASS =====
     if text in ["Class 9th", "Class 10th", "Class 11th", "Class 12th"]:
         context.user_data["class"] = text
         await show_subjects(update, context)
         return
 
-    # ===== SUBJECT SELECT =====
-    subjects = [
-        "SCIENCE 🧪","MATHEMATICS 📐","ECONOMICS 💳","HISTORY 🏆",
-        "POL. SCIENCE 👮","GEOGRAPHY 🌍","ENGLISH 📄",
-        "PHYSICS ⚛️","CHEMISTRY 🧪","BIOLOGY 🌱","MATHS 📐"
-    ]
+    # ===== SUBJECT =====
+    subjects = ["SCIENCE 🧪","MATHEMATICS 📐","ECONOMICS 💳","HISTORY 🏆",
+                "POL. SCIENCE 👮","GEOGRAPHY 🌍","ENGLISH 📄",
+                "PHYSICS ⚛️","CHEMISTRY 🧪","BIOLOGY 🌱","MATHS 📐"]
 
     if text in subjects:
         context.user_data["subject"] = text
         await show_materials(update, context)
         return
-
-    # ===== USER VIEW CONTENT =====
-    materials = [
-        "Lectures 📖","Handwritten Notes 🗒️","NCERT Exercises ✍️",
-        "Mindmaps 🤩","PYQs 📚","Top 100 Expected Questions 😎"
-    ]
-
-    if text in materials:
-        cls = context.user_data.get("class")
-        sub = context.user_data.get("subject")
-
-        content = data.get(cls, {}).get(sub, {}).get(text, [])
-
-        if not content:
-            await update.message.reply_text("No content available.")
-            return
-
-        for item in content:
-            try:
-                if item["type"] == "text":
-                    await update.message.reply_text(item["content"])
-
-                elif item["type"] == "photo":
-                    await update.message.reply_photo(item["file_id"], caption=item.get("caption"))
-
-                elif item["type"] == "document":
-                    await update.message.reply_document(item["file_id"], caption=item.get("caption"))
-
-                elif item["type"] == "video":
-                    await update.message.reply_video(item["file_id"], caption=item.get("caption"))
-
-                elif item["type"] == "audio":
-                    await update.message.reply_audio(item["file_id"], caption=item.get("caption"))
-            except:
-                pass
-        return
-
-    # ================= ADMIN =================
-
-    if user_id == ADMIN_ID:
-
-        step = context.user_data.get("admin_step")
-
-        # ADD MATERIAL
-        if text == "➕ Add Material":
-            context.user_data["admin_step"] = "class"
-            await update.message.reply_text("Select Class:")
-            return
-
-        if step == "class":
-            context.user_data["admin_class"] = text
-            context.user_data["admin_step"] = "subject"
-            context.user_data["class"] = text
-            await show_subjects(update, context)
-            return
-
-        if step == "subject":
-            context.user_data["admin_subject"] = text
-            context.user_data["admin_step"] = "category"
-            await show_materials(update, context)
-            return
-
-        if step == "category":
-            context.user_data["admin_category"] = text
-            context.user_data["admin_step"] = "content"
-            await update.message.reply_text("Send content now:")
-            return
-
-        if step == "content":
-            cls = context.user_data["admin_class"]
-            sub = context.user_data["admin_subject"]
-            cat = context.user_data["admin_category"]
-
-            data.setdefault(cls, {}).setdefault(sub, {}).setdefault(cat, [])
-
-            msg = update.message
-
-            if msg.text:
-                item = {"type": "text", "content": msg.text}
-            elif msg.photo:
-                item = {"type": "photo", "file_id": msg.photo[-1].file_id, "caption": msg.caption}
-            elif msg.document:
-                item = {"type": "document", "file_id": msg.document.file_id, "caption": msg.caption}
-            elif msg.video:
-                item = {"type": "video", "file_id": msg.video.file_id, "caption": msg.caption}
-            elif msg.audio:
-                item = {"type": "audio", "file_id": msg.audio.file_id, "caption": msg.caption}
-            else:
-                await update.message.reply_text("Unsupported format")
-                return
-
-            data[cls][sub][cat].append(item)
-            save_data(data)
-
-            await update.message.reply_text("Saved successfully")
-            context.user_data.clear()
-            return
-
-        # DIRECT MESSAGE
-        if text == "📩 Send Message":
-            context.user_data["admin_step"] = "send_id"
-            await update.message.reply_text("Enter User ID:")
-            return
-
-        if step == "send_id":
-            context.user_data["target"] = int(text)
-            context.user_data["admin_step"] = "send_msg"
-            await update.message.reply_text("Send message:")
-            return
-
-        if step == "send_msg":
-            target = context.user_data["target"]
-            msg = update.message
-
-            try:
-                if msg.text:
-                    await context.bot.send_message(target, msg.text)
-                elif msg.photo:
-                    await context.bot.send_photo(target, msg.photo[-1].file_id, caption=msg.caption)
-                elif msg.document:
-                    await context.bot.send_document(target, msg.document.file_id, caption=msg.caption)
-                elif msg.video:
-                    await context.bot.send_video(target, msg.video.file_id, caption=msg.caption)
-                elif msg.audio:
-                    await context.bot.send_audio(target, msg.audio.file_id, caption=msg.caption)
-
-                await update.message.reply_text("Message sent")
-            except:
-                await update.message.reply_text("Failed (user must start bot)")
-
-            context.user_data.clear()
-            return
 
 # ================= RUN =================
 
