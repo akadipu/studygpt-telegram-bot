@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+from flask import Flask, request
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -10,6 +11,10 @@ from telegram.ext import (
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 8558716745
 DATA_FILE = "data.json"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+flask_app = Flask(__name__)
+app = ApplicationBuilder().token(TOKEN).build()
 
 active_users = set()
 user_timers = {}
@@ -51,16 +56,7 @@ async def expire_chat(user_id, context):
         try:
             await context.bot.send_message(user_id, "Session expired & chat cleared.")
             await asyncio.sleep(1)
-            await context.bot.send_message(
-                user_id,
-                "🚀 StudyGPT: Ace your exams with Handwritten Notes, Mindmaps, and Solved PYQs!\n\nChoose your class 👇",
-                reply_markup=ReplyKeyboardMarkup(
-                    [["Class 9th", "Class 10th"],
-                     ["Class 11th", "Class 12th"],
-                     ["📞 Contact Us"]],
-                    resize_keyboard=True
-                )
-            )
+            await send_main_menu(user_id, context)
         except:
             pass
 
@@ -68,36 +64,24 @@ async def expire_chat(user_id, context):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
+    await send_main_menu(update.message.chat_id, context)
 
+async def send_main_menu(chat_id, context):
     keyboard = [
         ["Class 9th", "Class 10th"],
         ["Class 11th", "Class 12th"],
         ["📞 Contact Us"]
     ]
 
-    await update.message.reply_text(
+    await context.bot.send_message(
+        chat_id,
         "🚀 StudyGPT: Ace your exams with Handwritten Notes, Mindmaps, and Solved PYQs!\n\nChoose your class 👇",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    )
-
-# ================= ADMIN =================
-
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-
-    keyboard = [["➕ Add Material"]]
-
-    await update.message.reply_text(
-        "Admin Panel 👨‍💻",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
 # ================= SUBJECT MENU =================
 
-async def show_subjects(update, context):
-    cls = context.user_data.get("class")
-
+async def show_subjects(chat_id, cls, context):
     if cls in ["Class 9th", "Class 10th"]:
         keyboard = [
             ["SCIENCE 🧪", "MATHEMATICS 📐"],
@@ -114,7 +98,8 @@ async def show_subjects(update, context):
 
     keyboard.append(["⬅ Back", "🏠 Main Menu"])
 
-    await update.message.reply_text(
+    await context.bot.send_message(
+        chat_id,
         f"{cls} Subjects",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
@@ -123,57 +108,21 @@ async def show_subjects(update, context):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    text = update.message.text if update.message.text else ""
+    msg = update.message
+    text = msg.text if msg.text else ""
 
-    data = load_data()
-
-    # ===== ADMIN REPLY SYSTEM =====
-    if user_id == ADMIN_ID and update.message.reply_to_message:
-        replied_msg_id = update.message.reply_to_message.message_id
-        target_user = context.bot_data.get(replied_msg_id)
-
+    # ===== ADMIN REPLY =====
+    if user_id == ADMIN_ID and msg.reply_to_message:
+        target_user = context.bot_data.get(msg.reply_to_message.message_id)
         if target_user:
-            msg = update.message
-
-            if msg.text:
-                sent = await context.bot.send_message(target_user, msg.text)
-
-            elif msg.photo:
-                sent = await context.bot.send_photo(
-                    target_user,
-                    photo=msg.photo[-1].file_id,
-                    caption=msg.caption
-                )
-
-            elif msg.video:
-                sent = await context.bot.send_video(
-                    target_user,
-                    video=msg.video.file_id,
-                    caption=msg.caption
-                )
-
-            elif msg.document:
-                sent = await context.bot.send_document(
-                    target_user,
-                    document=msg.document.file_id,
-                    caption=msg.caption
-                )
-
-            elif msg.audio:
-                sent = await context.bot.send_audio(
-                    target_user,
-                    audio=msg.audio.file_id,
-                    caption=msg.caption
-                )
-
-            else:
-                return
-
-            # 🔥 TRACK ADMIN REPLY
-            chat_messages.setdefault(target_user, []).append(
-                (sent.message_id, update.message.message_id)
+            sent = await context.bot.copy_message(
+                chat_id=target_user,
+                from_chat_id=ADMIN_ID,
+                message_id=msg.message_id
             )
-
+            chat_messages.setdefault(target_user, []).append(
+                (sent.message_id, msg.message_id)
+            )
             return
 
     # ===== MAIN MENU =====
@@ -188,7 +137,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if last == "main":
             await start(update, context)
         elif last == "class":
-            await show_subjects(update, context)
+            await show_subjects(user_id, context.user_data.get("class"), context)
         else:
             await start(update, context)
         return
@@ -199,8 +148,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = [["🧹 Clear History", "❌ End Chat"]]
 
-        await update.message.reply_text(
-            "StudyGPT Support Team:\n\n💬 Need help? Send your message here and our team will get back to you directly! 🚀",
+        await context.bot.send_message(
+            user_id,
+            "StudyGPT Support Team:\n\n💬 Need help? Send your message here and our team will reply directly! 🚀",
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
 
@@ -212,106 +162,85 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ===== CLEAR HISTORY =====
     if text == "🧹 Clear History" and user_id in active_users:
-        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
+        for u, a in chat_messages.get(user_id, []):
             try:
-                await context.bot.delete_message(user_id, user_msg_id)
+                await context.bot.delete_message(user_id, u)
             except:
                 pass
             try:
-                await context.bot.delete_message(ADMIN_ID, admin_msg_id)
+                await context.bot.delete_message(ADMIN_ID, a)
             except:
                 pass
 
         chat_messages[user_id] = []
-        await update.message.reply_text("🧹 History cleared!")
+        await context.bot.send_message(user_id, "🧹 History cleared!")
         return
 
     # ===== END CHAT =====
     if text == "❌ End Chat" and user_id in active_users:
-
-        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
+        for u, a in chat_messages.get(user_id, []):
             try:
-                await context.bot.delete_message(user_id, user_msg_id)
+                await context.bot.delete_message(user_id, u)
             except:
                 pass
             try:
-                await context.bot.delete_message(ADMIN_ID, admin_msg_id)
+                await context.bot.delete_message(ADMIN_ID, a)
             except:
                 pass
 
         chat_messages[user_id] = []
         active_users.discard(user_id)
 
-        await update.message.reply_text("Chat ended & history cleared.")
+        await context.bot.send_message(user_id, "Chat ended & history cleared.")
         await asyncio.sleep(1)
-        await start(update, context)
+        await send_main_menu(user_id, context)
         return
 
-    # ===== CHAT (MEDIA + TEXT) =====
+    # ===== CHAT RELAY =====
     if user_id in active_users:
-
-        if user_id in user_timers:
-            user_timers[user_id].cancel()
-
-        user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
-
-        user = update.message
-        sender = update.message.from_user
-        caption = f"{sender.first_name}\n🆔 {sender.id}"
-
-        if user.text:
-            admin_msg = await context.bot.send_message(
-                ADMIN_ID,
-                f"{caption}\n\n{user.text}"
-            )
-        elif user.photo:
-            admin_msg = await context.bot.send_photo(
-                ADMIN_ID,
-                photo=user.photo[-1].file_id,
-                caption=caption
-            )
-        elif user.video:
-            admin_msg = await context.bot.send_video(
-                ADMIN_ID,
-                video=user.video.file_id,
-                caption=caption
-            )
-        elif user.document:
-            admin_msg = await context.bot.send_document(
-                ADMIN_ID,
-                document=user.document.file_id,
-                caption=caption
-            )
-        elif user.audio:
-            admin_msg = await context.bot.send_audio(
-                ADMIN_ID,
-                audio=user.audio.file_id,
-                caption=caption
-            )
-        else:
-            return
-
-        chat_messages.setdefault(user_id, []).append(
-            (update.message.message_id, admin_msg.message_id)
+        admin_msg = await context.bot.copy_message(
+            chat_id=ADMIN_ID,
+            from_chat_id=user_id,
+            message_id=msg.message_id
         )
 
-        # 🔥 MAP ADMIN MESSAGE → USER
-        context.bot_data[admin_msg.message_id] = user_id
+        chat_messages.setdefault(user_id, []).append(
+            (msg.message_id, admin_msg.message_id)
+        )
 
+        context.bot_data[admin_msg.message_id] = user_id
         return
 
     # ===== CLASS SELECT =====
     if text in ["Class 9th", "Class 10th", "Class 11th", "Class 12th"]:
         context.user_data["class"] = text
         context.user_data["last"] = "main"
-        await show_subjects(update, context)
+        await show_subjects(user_id, text, context)
+
+# ================= ROUTES =================
+
+@flask_app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    asyncio.run(app.process_update(update))
+    return "ok"
+
+@flask_app.route("/")
+def home():
+    return "Bot running"
 
 # ================= MAIN =================
 
-app = ApplicationBuilder().token(TOKEN).build()
+if __name__ == "__main__":
+    import requests
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("admin", admin))
-app.add_handler(MessageHandler(~filters.COMMAND, handle_message))
+    # set webhook
+    requests.get(
+        f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={WEBHOOK_URL}/{TOKEN}"
+    )
 
-app.run_polling()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin))
+    app.add_handler(MessageHandler(~filters.COMMAND, handle_message))
+
+    flask_app.run(host="0.0.0.0", port=8000)
