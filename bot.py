@@ -2,16 +2,14 @@ import os
 import json
 import asyncio
 from collections import deque
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters, TypeHandler
+    ContextTypes, filters
 )
-from telegram import MessageReactionUpdated
 
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 8558716745
-TARGET_USER_ID = 8071314699
 DATA_FILE = "data.json"
 MAX_RECENT = 10          # how many recent contacts to remember
 
@@ -77,7 +75,7 @@ def main_menu_keyboard():
 def admin_panel_keyboard():
     return ReplyKeyboardMarkup(
         [["➕ Add Material",   "❌ Delete Material"],
-         ["📋 List Materials", "📨 Send Message"],
+         ["📋 List Materials", "🚪 Exit Admin Mode"],
          ["👥 Recent Contacts"]],
         resize_keyboard=True
     )
@@ -311,51 +309,6 @@ async def forward_any(bot, to_chat: int, msg,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REACTION MIRROR  (Bot API 7.0+)
-# ══════════════════════════════════════════════════════════════════════════════
-
-async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ru = update.message_reaction
-    if not ru:
-        return
-    reactor_id    = ru.user.id if ru.user else None
-    msg_id        = ru.message_id
-    new_reactions = ru.new_reaction
-    if not new_reactions or not reactor_id:
-        return
-
-    r = new_reactions[0]
-    emoji = getattr(r, "emoji", None)
-    if not emoji:
-        return
-
-    if reactor_id == ADMIN_ID:
-        target_user = context.bot_data.get(f"admin_msg_{msg_id}")
-        if target_user:
-            for user_msg_id, admin_msg_id in chat_messages.get(target_user, []):
-                if admin_msg_id == msg_id:
-                    try:
-                        await context.bot.set_message_reaction(
-                            target_user, user_msg_id,
-                            [{"type": "emoji", "emoji": emoji}]
-                        )
-                    except Exception:
-                        pass
-                    break
-    else:
-        for user_msg_id, admin_msg_id in chat_messages.get(reactor_id, []):
-            if user_msg_id == msg_id:
-                try:
-                    await context.bot.set_message_reaction(
-                        ADMIN_ID, admin_msg_id,
-                        [{"type": "emoji", "emoji": emoji}]
-                    )
-                except Exception:
-                    pass
-                break
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # ADMIN LIVE-CHAT HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -462,10 +415,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_mode = context.user_data.get("admin_mode", "")
 
         # ── EXIT / PANEL ───────────────────────────────────────────────────────
-        if text in ("🛑 Exit to Panel", "🛑 Safe Exit", "🏠 Main Menu"):
+        if text in ("🛑 Exit to Panel", "🛑 Safe Exit", "🏠 Main Menu", "🚪 Exit Admin Mode"):
             admin_active_user = None
             context.user_data.clear()
-            await msg.reply_text("Admin Panel 👨‍💻", reply_markup=admin_panel_keyboard())
+            if text == "🚪 Exit Admin Mode":
+                await msg.reply_text(
+                    "👋 Exited admin mode. You're now in user mode.",
+                    reply_markup=main_menu_keyboard()
+                )
+            else:
+                await msg.reply_text("Admin Panel 👨‍💻", reply_markup=admin_panel_keyboard())
             return
 
         # ── LIVE CHAT CONTROLS ─────────────────────────────────────────────────
@@ -521,23 +480,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     context.bot_data[f"admin_msg_{msg.message_id}"] = target
             except Exception as e:
                 await msg.reply_text(f"⚠️ Could not send: {e}")
-            return
-
-        # ── SEND MESSAGE (one-shot to TARGET_USER_ID) ──────────────────────────
-        if text == "📨 Send Message":
-            context.user_data["admin_mode"] = "send"
-            await msg.reply_text(
-                "📨 Type your message to send to the target user:",
-                reply_markup=ReplyKeyboardMarkup([["🛑 Exit to Panel"]], resize_keyboard=True)
-            )
-            return
-
-        if admin_mode == "send":
-            if msg.reply_to_message:
-                return
-            if msg.text:
-                await context.bot.send_message(TARGET_USER_ID, text)
-                await msg.reply_text("✅ Message sent!")
             return
 
         # ── ADD MATERIAL ───────────────────────────────────────────────────────
@@ -874,8 +816,4 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("admin", admin_cmd))
 app.add_handler(MessageHandler(~filters.COMMAND, handle_message))
 
-# Mirror emoji reactions between admin and user (Bot API 7.0+)
-app.add_handler(TypeHandler(MessageReactionUpdated, handle_reaction))
-
-# Must pass ALL_TYPES so reaction updates are received
-app.run_polling(allowed_updates=Update.ALL_TYPES)
+app.run_polling()
