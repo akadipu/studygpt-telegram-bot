@@ -9,6 +9,7 @@ from telegram.ext import (
 
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 8558716745
+TARGET_USER_ID = 8558716745
 DATA_FILE = "data.json"
 
 active_users = set()
@@ -86,7 +87,10 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return
 
-    keyboard = [["➕ Add Material"]]
+    keyboard = [
+        ["➕ Add Material", "❌ Delete Material"],
+        ["📨 Send Message"]
+    ]
 
     await update.message.reply_text(
         "Admin Panel 👨‍💻",
@@ -116,6 +120,29 @@ async def show_subjects(update, context):
 
     await update.message.reply_text(
         f"{cls} Subjects",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+    
+# ================= MATERIAL MENU =================
+
+async def show_materials(update, context):
+    cls = context.user_data.get("class")
+
+    if cls == "Class 9th":
+        keyboard = [["📚 Lectures", "📝 Notes"], ["🧠 Mindmaps", "❗ Imp Questions"]]
+    elif cls == "Class 10th":
+        keyboard = [["📚 Lectures", "📝 Notes"], ["🧠 Mindmaps", "📄 PYQs"]]
+    elif cls == "Class 11th":
+        keyboard = [["📚 Lectures", "📝 Notes"], ["🧠 Mindmaps", "❗ Imp Questions"]]
+    else:
+        keyboard = [["📚 Lectures", "📝 Notes"], ["🧠 Mindmaps", "📄 PYQs"]]
+
+    keyboard.append(["⬅ Back", "🏠 Main Menu"])
+
+    context.user_data["last"] = "material"
+
+    await update.message.reply_text(
+        context.user_data.get("subject"),
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
@@ -299,6 +326,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.bot_data[admin_msg.message_id] = user_id
 
         return
+        
+    # ===== SAFE EXIT =====
+    if user_id == ADMIN_ID and text == "🛑 Safe Exit":
+        context.user_data.pop("send_mode", None)
+        await admin(update, context)
+        return
+     # ================= SEND MESSAGE =================
+
+    if user_id == ADMIN_ID and text == "📨 Send Message":
+        context.user_data["send_mode"] = True
+        await update.message.reply_text(
+            "Send message:",
+            reply_markup=ReplyKeyboardMarkup([["🛑 Safe Exit"]], resize_keyboard=True)
+        )
+        return
+
+    if user_id == ADMIN_ID and context.user_data.get("send_mode"):
+        if update.message.reply_to_message:
+            return
+        if update.message.text:
+            await context.bot.send_message(TARGET_USER_ID, text)
+        return
+
 
     # ===== CLASS SELECT =====
     if text in ["Class 9th", "Class 10th", "Class 11th", "Class 12th"]:
