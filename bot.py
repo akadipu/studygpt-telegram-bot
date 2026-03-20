@@ -1,7 +1,9 @@
 import os
 import json
 import asyncio
+import time
 from collections import deque
+from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -11,24 +13,46 @@ from telegram.ext import (
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 8558716745
 DATA_FILE = "data.json"
-MAX_RECENT = 10          # how many recent contacts to remember
+MAX_RECENT = 10
+
+INACTIVITY_SECONDS = 120   # 2 minutes → auto-close
 
 # ── runtime state ──────────────────────────────────────────────────────────────
-active_users   = set()          # users currently in contact-us chat
-user_timers    = {}             # asyncio tasks for session expiry
-chat_messages  = {}             # {user_id: [(user_msg_id, admin_msg_id), ...]}
+active_users      = set()
+user_timers       = {}          # inactivity auto-close tasks  {user_id: Task}
+chat_messages     = {}          # {user_id: [(user_msg_id, admin_msg_id), ...]}
+admin_active_user = None
 
-# Admin live-chat state
-admin_active_user = None        # which user the admin is currently DMing
+# ── last-seen timestamps ───────────────────────────────────────────────────────
+# {user_id: float}  — unix timestamp of last message sent by that user
+user_last_seen    = {}
+# unix timestamp of last message sent by admin (to any user)
+admin_last_seen   = 0.0
 
-# Recent contacts: {user_id: {"name": str, "username": str}}
-recent_contacts = {}
-recent_contacts_order = deque(maxlen=MAX_RECENT)   # oldest→newest; display reversed
+# ── delivered/read status message IDs ─────────────────────────────────────────
+# When user sends a message we send a small "✅ Delivered" status line to the user.
+# When admin opens the DM (admin_open_chat) we upgrade it to "👀 Seen by Admin".
+# {user_id: status_message_id}  — the current status bubble in user's chat
+user_status_msg   = {}
+
+# ── recent contacts ────────────────────────────────────────────────────────────
+recent_contacts       = {}
+recent_contacts_order = deque(maxlen=MAX_RECENT)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DATA
+# UTILITIES
 # ══════════════════════════════════════════════════════════════════════════════
+
+def fmt_time(ts: float) -> str:
+    """Format a unix timestamp as a friendly 'Today HH:MM' or 'DD Mon HH:MM'."""
+    if ts == 0:
+        return "never"
+    dt = datetime.fromtimestamp(ts)
+    now = datetime.now()
+    if dt.date() == now.date():
+        return f"Today {dt.strftime('%I:%M %p')}"
+    return dt.strftime("%d %b %I:%M %p")
 
 def load_data():
     try:
@@ -41,13 +65,8 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
-
 def track_contact(user_id: int, sender):
-    name = (sender.full_name or sender.first_name or "").strip()
+    name     = (sender.full_name or sender.first_name or "").strip()
     username = f"@{sender.username}" if sender.username else ""
     recent_contacts[user_id] = {"name": name, "username": username}
     if user_id in recent_contacts_order:
@@ -55,18 +74,20 @@ def track_contact(user_id: int, sender):
     recent_contacts_order.append(user_id)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# KEYBOARDS
+# ══════════════════════════════════════════════════════════════════════════════
+
 def admin_chat_keyboard():
     return ReplyKeyboardMarkup(
-        [
-            ["🧹 Clear History", "❌ End Chat"],
-            ["👥 Recent Contacts", "🛑 Exit to Panel"]
-        ],
+        [["🧹 Clear History", "❌ End Chat"],
+         ["👥 Recent Contacts", "🛑 Exit to Panel"]],
         resize_keyboard=True
     )
 
 def main_menu_keyboard():
     return ReplyKeyboardMarkup(
-        [["Class 9th", "Class 10th"],
+        [["Class 9th",  "Class 10th"],
          ["Class 11th", "Class 12th"],
          ["📞 Contact Us"]],
         resize_keyboard=True
@@ -82,46 +103,131 @@ def admin_panel_keyboard():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SESSION EXPIRY
+# TYPING INDICATOR
+# Send "Admin is typing…" to user, pause briefly, then delete it.
+# The real message arrives right after — feels like a real DM.
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def expire_chat(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.sleep(180)
+async def show_typing(bot, user_id: int, seconds: float = 1.5):
+    """Send a temporary 'Admin is typing…' bubble, wait, then delete it."""
+    try:
+        typing_msg = await bot.send_message(user_id, "✍️ Admin is typing…")
+        await asyncio.sleep(seconds)
+        await bot.delete_message(user_id, typing_msg.message_id)
+    except Exception:
+        pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DELIVERED / READ STATUS
+# After user sends a message → show "✅ Delivered"
+# When admin opens DM with that user → upgrade to "👀 Seen by Admin  HH:MM"
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def set_delivered(bot, user_id: int):
+    """Post (or replace) the status bubble in the user's chat with ✅ Delivered."""
+    # delete previous status bubble if exists
+    old = user_status_msg.pop(user_id, None)
+    if old:
+        try:
+            await bot.delete_message(user_id, old)
+        except Exception:
+            pass
+    try:
+        m = await bot.send_message(user_id, "✅ Delivered")
+        user_status_msg[user_id] = m.message_id
+    except Exception:
+        pass
+
+
+async def set_seen(bot, user_id: int):
+    """Upgrade the status bubble to 👀 Seen by Admin."""
+    old = user_status_msg.pop(user_id, None)
+    if old:
+        try:
+            await bot.delete_message(user_id, old)
+        except Exception:
+            pass
+    try:
+        seen_time = fmt_time(time.time())
+        m = await bot.send_message(user_id, f"👀 Seen by Admin  •  {seen_time}")
+        user_status_msg[user_id] = m.message_id
+    except Exception:
+        pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INACTIVITY AUTO-CLOSE  (2 minutes)
+# Restarted every time either side sends a message.
+# If neither side sends anything for 2 min → clear history + close session.
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """Wait INACTIVITY_SECONDS then auto-close and clear the chat."""
+    await asyncio.sleep(INACTIVITY_SECONDS)
+
     if user_id not in active_users:
         return
 
     global admin_active_user
-    active_users.discard(user_id)
 
+    # delete all bridged messages
     for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
-        for chat, mid in [(user_id, user_msg_id), (ADMIN_ID, admin_msg_id)]:
+        for chat_id, mid in [(user_id, user_msg_id), (ADMIN_ID, admin_msg_id)]:
             try:
-                await context.bot.delete_message(chat, mid)
+                await context.bot.delete_message(chat_id, mid)
             except Exception:
                 pass
     chat_messages[user_id] = []
 
+    # clean up status bubble
+    old = user_status_msg.pop(user_id, None)
+    if old:
+        try:
+            await context.bot.delete_message(user_id, old)
+        except Exception:
+            pass
+
+    active_users.discard(user_id)
+
+    # notify user
     try:
-        await context.bot.send_message(user_id, "⏳ Session expired & chat cleared.")
+        await context.bot.send_message(
+            user_id,
+            "⏳ Chat auto-closed due to 2 minutes of inactivity.\n"
+            "History has been cleared."
+        )
         await asyncio.sleep(1)
         await context.bot.send_message(
             user_id,
-            "🚀 StudyGPT: Ace your exams with Handwritten Notes, Mindmaps, and Solved PYQs!\n\nChoose your class 👇",
+            "🚀 StudyGPT — Choose your class 👇",
             reply_markup=main_menu_keyboard()
         )
     except Exception:
         pass
 
+    # notify admin
     if admin_active_user == user_id:
         admin_active_user = None
+        info = recent_contacts.get(user_id, {})
+        name = info.get("name", str(user_id))
         try:
             await context.bot.send_message(
                 ADMIN_ID,
-                f"⏳ Session with user {user_id} expired.",
+                f"⏳ Chat with {name} auto-closed (2 min inactivity). History cleared.",
                 reply_markup=admin_panel_keyboard()
             )
         except Exception:
             pass
+
+
+def reset_inactivity_timer(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel existing timer and start a fresh one."""
+    if user_id in user_timers:
+        user_timers[user_id].cancel()
+    user_timers[user_id] = asyncio.create_task(
+        inactivity_close(user_id, context)
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -131,7 +237,8 @@ async def expire_chat(user_id: int, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text(
-        "🚀 StudyGPT: Ace your exams with Handwritten Notes, Mindmaps, and Solved PYQs!\n\nChoose your class 👇",
+        "🚀 StudyGPT: Ace your exams with Handwritten Notes, Mindmaps, and Solved PYQs!\n\n"
+        "Choose your class 👇",
         reply_markup=main_menu_keyboard()
     )
 
@@ -233,20 +340,12 @@ async def show_content(update, context):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# UNIVERSAL MESSAGE FORWARDER
-# Supports: text, photo, video, document, audio, voice, sticker, animation
-#           (GIF), video_note, location, contact
+# UNIVERSAL FORWARDER
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def forward_any(bot, to_chat: int, msg,
                       caption_prefix: str = "",
                       reply_to_message_id: int = None):
-    """
-    Forward any supported Telegram message type to `to_chat`.
-    caption_prefix is prepended to text/caption (used for the admin-side header).
-    reply_to_message_id enables quoted replies.
-    Returns the sent Message object or None.
-    """
     kw = {}
     if reply_to_message_id:
         kw["reply_to_message_id"] = reply_to_message_id
@@ -256,55 +355,44 @@ async def forward_any(bot, to_chat: int, msg,
     if msg.text:
         body = (caption_prefix + "\n\n" + msg.text).strip() if caption_prefix else msg.text
         return await bot.send_message(to_chat, body, **kw)
-
     if msg.sticker:
         if caption_prefix:
             await bot.send_message(to_chat, caption_prefix, **kw)
         return await bot.send_sticker(to_chat, sticker=msg.sticker.file_id)
-
-    if msg.animation:   # GIF
+    if msg.animation:
         return await bot.send_animation(to_chat, animation=msg.animation.file_id,
                                         caption=cp or None, **kw)
-
     if msg.photo:
         return await bot.send_photo(to_chat, photo=msg.photo[-1].file_id,
                                     caption=cp or None, **kw)
-
     if msg.video:
         return await bot.send_video(to_chat, video=msg.video.file_id,
                                     caption=cp or None, **kw)
-
     if msg.video_note:
         if caption_prefix:
             await bot.send_message(to_chat, caption_prefix, **kw)
         return await bot.send_video_note(to_chat, video_note=msg.video_note.file_id)
-
     if msg.voice:
         return await bot.send_voice(to_chat, voice=msg.voice.file_id,
                                     caption=cp or None, **kw)
-
     if msg.audio:
         return await bot.send_audio(to_chat, audio=msg.audio.file_id,
                                     caption=cp or None, **kw)
-
     if msg.document:
         return await bot.send_document(to_chat, document=msg.document.file_id,
                                        caption=cp or None, **kw)
-
     if msg.location:
         if caption_prefix:
             await bot.send_message(to_chat, caption_prefix, **kw)
         return await bot.send_location(to_chat,
                                        latitude=msg.location.latitude,
                                        longitude=msg.location.longitude)
-
     if msg.contact:
         if caption_prefix:
             await bot.send_message(to_chat, caption_prefix, **kw)
         return await bot.send_contact(to_chat,
                                       phone_number=msg.contact.phone_number,
                                       first_name=msg.contact.first_name)
-
     return None
 
 
@@ -319,16 +407,18 @@ async def admin_show_recent(update, context):
         return
 
     context.user_data["admin_mode"] = "pick_recent"
-    ids_list = list(reversed(recent_contacts_order))   # newest first
+    ids_list = list(reversed(recent_contacts_order))
     context.user_data["recent_ids"] = ids_list
 
     lines = ["👥 Recent Contacts — send a number to open DM:\n"]
     for i, uid in enumerate(ids_list, 1):
-        info  = recent_contacts.get(uid, {})
-        name  = info.get("name", "Unknown")
-        uname = info.get("username", "")
-        online = "🟢" if uid in active_users else "🔴"
-        lines.append(f"{i}. {online} {name} {uname}  [ID: {uid}]")
+        info      = recent_contacts.get(uid, {})
+        name      = info.get("name", "Unknown")
+        uname     = info.get("username", "")
+        online    = "🟢" if uid in active_users else "🔴"
+        last_ts   = user_last_seen.get(uid, 0)
+        last_seen = fmt_time(last_ts)
+        lines.append(f"{i}. {online} {name} {uname}  •  last seen {last_seen}  [ID: {uid}]")
 
     kb = [[str(i)] for i in range(1, len(ids_list) + 1)] + [["🛑 Exit to Panel"]]
     await update.message.reply_text(
@@ -338,6 +428,7 @@ async def admin_show_recent(update, context):
 
 
 async def admin_open_chat(update, context, target_user_id: int):
+    """Put admin into DM mode AND mark all pending messages as seen."""
     global admin_active_user
     admin_active_user = target_user_id
     context.user_data["admin_mode"] = "live_chat"
@@ -346,15 +437,24 @@ async def admin_open_chat(update, context, target_user_id: int):
     name   = info.get("name", str(target_user_id))
     uname  = info.get("username", "")
     status = "🟢 Online" if target_user_id in active_users else "🔴 Offline"
+    last_ts   = user_last_seen.get(target_user_id, 0)
+    last_seen = fmt_time(last_ts)
 
     await update.message.reply_text(
         f"💬 Now chatting with: {name} {uname}\n"
-        f"🆔 {target_user_id}  |  {status}\n\n"
+        f"🆔 {target_user_id}  |  {status}\n"
+        f"🕐 Last seen: {last_seen}\n\n"
         f"Just type or send anything — it goes straight to them.\n"
-        f"Long-press/reply-select a forwarded message for quoted replies.\n"
-        f"React to any forwarded message — the emoji mirrors to them.",
+        f"Swipe-reply any forwarded message for a quoted reply.",
         reply_markup=admin_chat_keyboard()
     )
+
+    # upgrade Delivered → Seen for this user
+    await set_seen(context.bot, target_user_id)
+
+    # reset inactivity timer for both sides
+    if target_user_id in active_users:
+        reset_inactivity_timer(target_user_id, context)
 
 
 async def admin_clear_history(update, context):
@@ -362,12 +462,19 @@ async def admin_clear_history(update, context):
     if not uid:
         return
     for user_msg_id, admin_msg_id in chat_messages.get(uid, []):
-        for chat, mid in [(uid, user_msg_id), (ADMIN_ID, admin_msg_id)]:
+        for chat_id, mid in [(uid, user_msg_id), (ADMIN_ID, admin_msg_id)]:
             try:
-                await context.bot.delete_message(chat, mid)
+                await context.bot.delete_message(chat_id, mid)
             except Exception:
                 pass
     chat_messages[uid] = []
+    # clean status bubble
+    old = user_status_msg.pop(uid, None)
+    if old:
+        try:
+            await context.bot.delete_message(uid, old)
+        except Exception:
+            pass
     await update.message.reply_text("🧹 Chat history cleared!", reply_markup=admin_chat_keyboard())
 
 
@@ -376,15 +483,22 @@ async def admin_end_chat(update, context):
     uid = admin_active_user
     if uid:
         for user_msg_id, admin_msg_id in chat_messages.get(uid, []):
-            for chat, mid in [(uid, user_msg_id), (ADMIN_ID, admin_msg_id)]:
+            for chat_id, mid in [(uid, user_msg_id), (ADMIN_ID, admin_msg_id)]:
                 try:
-                    await context.bot.delete_message(chat, mid)
+                    await context.bot.delete_message(chat_id, mid)
                 except Exception:
                     pass
         chat_messages[uid] = []
         active_users.discard(uid)
         if uid in user_timers:
             user_timers[uid].cancel()
+        # clean status bubble
+        old = user_status_msg.pop(uid, None)
+        if old:
+            try:
+                await context.bot.delete_message(uid, old)
+            except Exception:
+                pass
         try:
             await context.bot.send_message(uid, "❌ Admin ended the chat session.")
             await asyncio.sleep(0.5)
@@ -392,6 +506,7 @@ async def admin_end_chat(update, context):
                                            reply_markup=main_menu_keyboard())
         except Exception:
             pass
+
     admin_active_user = None
     context.user_data.clear()
     await update.message.reply_text("✅ Chat ended.", reply_markup=admin_panel_keyboard())
@@ -402,47 +517,42 @@ async def admin_end_chat(update, context):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global admin_active_user
+    global admin_active_user, admin_last_seen
 
     msg     = update.message
     user_id = msg.from_user.id
     text    = msg.text or ""
 
     # ══════════════════════════════════════════════════════════════════════════
-    # ██████████████████████████  ADMIN SIDE  █████████████████████████████████
+    # ADMIN SIDE
     # ══════════════════════════════════════════════════════════════════════════
     if user_id == ADMIN_ID:
         admin_mode = context.user_data.get("admin_mode", "")
 
-        # ── EXIT / PANEL ───────────────────────────────────────────────────────
+        # ── EXIT ──────────────────────────────────────────────────────────────
         if text in ("🛑 Exit to Panel", "🛑 Safe Exit", "🚪 Exit Admin Mode"):
             admin_active_user = None
             context.user_data.clear()
             if text == "🚪 Exit Admin Mode":
-                await msg.reply_text(
-                    "👋 Exited admin mode. You're now in user mode.",
-                    reply_markup=main_menu_keyboard()
-                )
+                await msg.reply_text("👋 Exited admin mode. You're now in user mode.",
+                                     reply_markup=main_menu_keyboard())
             else:
                 await msg.reply_text("Admin Panel 👨‍💻", reply_markup=admin_panel_keyboard())
             return
 
         if text == "🏠 Main Menu" and admin_mode:
-            # admin pressed Main Menu while inside an admin flow → back to panel
             admin_active_user = None
             context.user_data.clear()
             await msg.reply_text("Admin Panel 👨‍💻", reply_markup=admin_panel_keyboard())
             return
 
         # ── LIVE CHAT CONTROLS ─────────────────────────────────────────────────
-        if text == "🧹 Clear History":
-            if admin_active_user:
-                await admin_clear_history(update, context)
+        if text == "🧹 Clear History" and admin_active_user:
+            await admin_clear_history(update, context)
             return
 
-        if text == "❌ End Chat":
-            if admin_active_user:
-                await admin_end_chat(update, context)
+        if text == "❌ End Chat" and admin_active_user:
+            await admin_end_chat(update, context)
             return
 
         # ── RECENT CONTACTS ────────────────────────────────────────────────────
@@ -458,14 +568,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if 0 <= idx < len(ids_list):
                     await admin_open_chat(update, context, ids_list[idx])
                     return
-            # unrecognised → fall through (do nothing extra)
             return
 
         # ── ADMIN IN LIVE DM MODE ──────────────────────────────────────────────
         if admin_mode == "live_chat" and admin_active_user:
             target = admin_active_user
 
-            # Detect quoted reply: admin long-pressed a forwarded message
+            # Update admin last-seen timestamp
+            admin_last_seen = time.time()
+
+            # Reset inactivity timer (admin just spoke)
+            if target in active_users:
+                reset_inactivity_timer(target, context)
+
+            # Detect quoted reply
             reply_to_in_user_chat = None
             if msg.reply_to_message:
                 replied_admin_id = msg.reply_to_message.message_id
@@ -543,7 +659,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 elif msg.audio:
                     data["categories"][key].append({"type": "audio",    "file_id": msg.audio.file_id,     "caption": msg.caption or ""})
                 else:
-                    await msg.reply_text("⚠️ Unsupported type. Send text, photo, video, document, or audio.")
+                    await msg.reply_text("⚠️ Unsupported type.")
                     return
 
                 save_data(data)
@@ -552,7 +668,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"Send another file to keep adding, or 🛑 Exit to Panel."
                 )
                 return
-            return   # ignore unrecognised step input
+            return
 
         # ── DELETE MATERIAL ────────────────────────────────────────────────────
         if text == "❌ Delete Material":
@@ -601,8 +717,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cls, subject, mat_type = (context.user_data["del_class"],
                                           context.user_data["del_subject"],
                                           context.user_data["del_type"])
-                key  = f"{cls}|{subject}|{mat_type}"
-                data = load_data()
+                key   = f"{cls}|{subject}|{mat_type}"
+                data  = load_data()
                 items = data["categories"].get(key, [])
                 if text.isdigit():
                     idx = int(text) - 1
@@ -649,7 +765,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     # ══════════════════════════════════════════════════════════════════════════
-    # ██████████  USER SIDE  (also reached by admin in user/study mode)  ███████
+    # USER SIDE  (also reached by admin in user/study mode)
     # ══════════════════════════════════════════════════════════════════════════
 
     # ── GLOBAL NAVIGATION ─────────────────────────────────────────────────────
@@ -669,10 +785,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "📞 Contact Us":
         active_users.add(user_id)
         track_contact(user_id, msg.from_user)
+        user_last_seen[user_id] = time.time()
 
         await msg.reply_text(
             "StudyGPT Support Team:\n\n"
-            "💬 Send your message here and our team will reply directly! 🚀",
+            "💬 Send your message here and our team will reply directly! 🚀\n\n"
+            "⏳ Note: Chat auto-closes after 2 minutes of inactivity.",
             reply_markup=ReplyKeyboardMarkup(
                 [["🧹 Clear History", "❌ End Chat"]], resize_keyboard=True
             )
@@ -692,37 +810,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        if user_id in user_timers:
-            user_timers[user_id].cancel()
-        user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
+        reset_inactivity_timer(user_id, context)
         return
 
     # ── USER: CLEAR HISTORY ────────────────────────────────────────────────────
     if text == "🧹 Clear History" and user_id in active_users:
         for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
-            for chat, mid in [(user_id, user_msg_id), (ADMIN_ID, admin_msg_id)]:
+            for chat_id, mid in [(user_id, user_msg_id), (ADMIN_ID, admin_msg_id)]:
                 try:
-                    await context.bot.delete_message(chat, mid)
+                    await context.bot.delete_message(chat_id, mid)
                 except Exception:
                     pass
         chat_messages[user_id] = []
+        old = user_status_msg.pop(user_id, None)
+        if old:
+            try:
+                await context.bot.delete_message(user_id, old)
+            except Exception:
+                pass
         await msg.reply_text("🧹 History cleared!")
+        reset_inactivity_timer(user_id, context)
         return
 
     # ── USER: END CHAT ─────────────────────────────────────────────────────────
     if text == "❌ End Chat" and user_id in active_users:
         for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
-            for chat, mid in [(user_id, user_msg_id), (ADMIN_ID, admin_msg_id)]:
+            for chat_id, mid in [(user_id, user_msg_id), (ADMIN_ID, admin_msg_id)]:
                 try:
-                    await context.bot.delete_message(chat, mid)
+                    await context.bot.delete_message(chat_id, mid)
                 except Exception:
                     pass
         chat_messages[user_id] = []
         active_users.discard(user_id)
         if user_id in user_timers:
             user_timers[user_id].cancel()
+        old = user_status_msg.pop(user_id, None)
+        if old:
+            try:
+                await context.bot.delete_message(user_id, old)
+            except Exception:
+                pass
 
-        # Notify admin
         if admin_active_user == user_id:
             try:
                 info = recent_contacts.get(user_id, {})
@@ -741,16 +869,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── ACTIVE CONTACT-US CHAT: forward user → admin ───────────────────────────
     if user_id in active_users:
-        # Reset expiry timer
-        if user_id in user_timers:
-            user_timers[user_id].cancel()
-        user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
+        # update last-seen
+        user_last_seen[user_id] = time.time()
+
+        # reset inactivity timer (user just spoke)
+        reset_inactivity_timer(user_id, context)
 
         track_contact(user_id, msg.from_user)
         info   = recent_contacts.get(user_id, {})
         prefix = f"👤 {info.get('name', msg.from_user.first_name)} {info.get('username', '')}\n🆔 {user_id}"
 
-        # Detect if user quoted one of admin's previous messages
+        # Detect quoted reply
         reply_to_admin_id = None
         if msg.reply_to_message:
             replied_user_side_id = msg.reply_to_message.message_id
@@ -771,8 +900,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 context.bot_data[f"admin_msg_{admin_msg.message_id}"] = user_id
 
-                # Nudge admin to open DM if they aren't already on this user
-                if admin_active_user != user_id:
+                # Show ✅ Delivered to user
+                await set_delivered(context.bot, user_id)
+
+                # If admin is already in DM with this user → immediately upgrade to 👀 Seen
+                if admin_active_user == user_id:
+                    await asyncio.sleep(0.5)
+                    await set_seen(context.bot, user_id)
+                else:
+                    # Nudge admin
                     ids_newest_first = list(reversed(recent_contacts_order))
                     try:
                         pos = ids_newest_first.index(user_id) + 1
@@ -788,6 +924,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     except Exception:
                         pass
+
+                    # Show typing indicator ONLY when admin is about to reply
+                    # (triggered from admin side in live_chat, not here)
 
         except Exception as e:
             await msg.reply_text(f"⚠️ Could not forward message: {e}")
@@ -808,6 +947,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.update({"material_type": text, "last": "material"})
         await show_content(update, context)
         return
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TYPING INDICATOR HOOK
+# We wrap the admin live-chat send so typing indicator appears BEFORE the msg.
+# This is done by patching the live_chat block's forward call with a pre-step.
+# ══════════════════════════════════════════════════════════════════════════════
+# (Already handled inline: show_typing() is called before forward_any()
+#  inside the live_chat block — see below patch)
+
+# Re-patch live_chat block to include typing indicator
+_original_handle = handle_message
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global admin_active_user, admin_last_seen
+
+    msg     = update.message
+    user_id = msg.from_user.id
+
+    # Intercept admin live_chat sends to inject typing indicator
+    if user_id == ADMIN_ID:
+        admin_mode = context.user_data.get("admin_mode", "")
+        if admin_mode == "live_chat" and admin_active_user:
+            target = admin_active_user
+            text   = msg.text or ""
+
+            # skip control buttons — they're handled by original function
+            control_buttons = {
+                "🧹 Clear History", "❌ End Chat",
+                "👥 Recent Contacts", "🛑 Exit to Panel",
+                "🛑 Safe Exit", "🚪 Exit Admin Mode", "🏠 Main Menu"
+            }
+            if text not in control_buttons:
+                # Show typing indicator to user before the real message lands
+                if target in active_users:
+                    await show_typing(context.bot, target, seconds=1.2)
+
+    await _original_handle(update, context)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
