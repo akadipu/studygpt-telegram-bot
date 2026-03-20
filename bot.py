@@ -142,7 +142,7 @@ async def show_materials(update, context):
     context.user_data["last"] = "material"
 
     await update.message.reply_text(
-        context.user_data.get("subject"),
+        context.user_data.get("Subjects"),
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
