@@ -127,6 +127,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = load_data()
 
+    # ===== ADMIN REPLY SYSTEM =====
+    if user_id == ADMIN_ID and update.message.reply_to_message:
+        replied_msg_id = update.message.reply_to_message.message_id
+        target_user = context.bot_data.get(replied_msg_id)
+
+        if target_user:
+            msg = update.message
+
+            if msg.text:
+                await context.bot.send_message(target_user, msg.text)
+
+            elif msg.photo:
+                await context.bot.send_photo(
+                    target_user,
+                    photo=msg.photo[-1].file_id,
+                    caption=msg.caption
+                )
+
+            elif msg.video:
+                await context.bot.send_video(
+                    target_user,
+                    video=msg.video.file_id,
+                    caption=msg.caption
+                )
+
+            elif msg.document:
+                await context.bot.send_document(
+                    target_user,
+                    document=msg.document.file_id,
+                    caption=msg.caption
+                )
+
+            elif msg.audio:
+                await context.bot.send_audio(
+                    target_user,
+                    audio=msg.audio.file_id,
+                    caption=msg.caption
+                )
+            return
+
     # ===== MAIN MENU =====
     if text == "🏠 Main Menu":
         await start(update, context)
@@ -245,6 +285,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_messages.setdefault(user_id, []).append(
             (update.message.message_id, admin_msg.message_id)
         )
+
+        # 🔥 Map admin message → user
+        context.bot_data[admin_msg.message_id] = user_id
+
         return
 
     # ===== CLASS SELECT =====
