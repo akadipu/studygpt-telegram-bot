@@ -41,13 +41,13 @@ async def expire_chat(user_id, context):
     if user_id in active_users:
         active_users.discard(user_id)
 
-        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
+        for u, a in chat_messages.get(user_id, []):
             try:
-                await context.bot.delete_message(user_id, user_msg_id)
+                await context.bot.delete_message(user_id, u)
             except:
                 pass
             try:
-                await context.bot.delete_message(ADMIN_ID, admin_msg_id)
+                await context.bot.delete_message(ADMIN_ID, a)
             except:
                 pass
 
@@ -79,7 +79,20 @@ async def send_main_menu(chat_id, context):
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
-# ================= SUBJECT MENU =================
+# ================= ADMIN =================
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    keyboard = [["➕ Add Material"]]
+
+    await update.message.reply_text(
+        "Admin Panel 👨‍💻",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+
+# ================= SUBJECT =================
 
 async def show_subjects(chat_id, cls, context):
     if cls in ["Class 9th", "Class 10th"]:
@@ -113,14 +126,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ===== ADMIN REPLY =====
     if user_id == ADMIN_ID and msg.reply_to_message:
-        target_user = context.bot_data.get(msg.reply_to_message.message_id)
-        if target_user:
+        target = context.bot_data.get(msg.reply_to_message.message_id)
+        if target:
             sent = await context.bot.copy_message(
-                chat_id=target_user,
+                chat_id=target,
                 from_chat_id=ADMIN_ID,
                 message_id=msg.message_id
             )
-            chat_messages.setdefault(target_user, []).append(
+            chat_messages.setdefault(target, []).append(
                 (sent.message_id, msg.message_id)
             )
             return
@@ -132,12 +145,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ===== BACK =====
     if text == "⬅ Back":
-        last = context.user_data.get("last")
-
-        if last == "main":
-            await start(update, context)
-        elif last == "class":
-            await show_subjects(user_id, context.user_data.get("class"), context)
+        cls = context.user_data.get("class")
+        if cls:
+            await show_subjects(user_id, cls, context)
         else:
             await start(update, context)
         return
@@ -150,7 +160,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_message(
             user_id,
-            "StudyGPT Support Team:\n\n💬 Need help? Send your message here and our team will reply directly! 🚀",
+            "StudyGPT Support Team:\n\n💬 Send your message here and we’ll reply directly!",
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
 
@@ -211,10 +221,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.bot_data[admin_msg.message_id] = user_id
         return
 
-    # ===== CLASS SELECT =====
+    # ===== CLASS =====
     if text in ["Class 9th", "Class 10th", "Class 11th", "Class 12th"]:
         context.user_data["class"] = text
-        context.user_data["last"] = "main"
         await show_subjects(user_id, text, context)
 
 # ================= ROUTES =================
