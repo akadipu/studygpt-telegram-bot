@@ -13,6 +13,7 @@ DATA_FILE = "data.json"
 
 active_users = set()
 user_timers = {}
+chat_messages = {}
 
 # ================= DATA =================
 
@@ -31,10 +32,25 @@ def save_data(data):
 
 async def expire_chat(user_id, context):
     await asyncio.sleep(180)
+
     if user_id in active_users:
         active_users.discard(user_id)
+
+        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
+            try:
+                await context.bot.delete_message(user_id, user_msg_id)
+            except:
+                pass
+
+            try:
+                await context.bot.delete_message(ADMIN_ID, admin_msg_id)
+            except:
+                pass
+
+        chat_messages[user_id] = []
+
         try:
-            await context.bot.send_message(user_id, "Session expired.")
+            await context.bot.send_message(user_id, "Session expired & chat cleared.")
         except:
             pass
 
@@ -50,8 +66,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await update.message.reply_text(
-    "🚀 StudyGPT: Ace your exams with Handwritten Notes, Mindmaps, and Solved PYQs! 🎓\n\n"
-    "Choose your class 👇",
+        "🚀 StudyGPT: Ace your exams with Handwritten Notes, Mindmaps, and Solved PYQs!\n\nChoose your class 👇",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
@@ -73,30 +88,14 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_subjects(update, context):
     cls = context.user_data.get("class")
 
-    if cls == "Class 9th":
+    if cls in ["Class 9th", "Class 10th"]:
         keyboard = [
             ["SCIENCE 🧪", "MATHEMATICS 📐"],
             ["ECONOMICS 💳", "HISTORY 🏆"],
             ["POL. SCIENCE 👮", "GEOGRAPHY 🌍"],
             ["ENGLISH 📄"]
         ]
-
-    elif cls == "Class 10th":
-        keyboard = [
-            ["SCIENCE 🧪", "MATHEMATICS 📐"],
-            ["ECONOMICS 💳", "HISTORY 🏆"],
-            ["POL. SCIENCE 👮", "GEOGRAPHY 🌍"],
-            ["ENGLISH 📄"]
-        ]
-
-    elif cls == "Class 11th":
-        keyboard = [
-            ["PHYSICS ⚛️", "CHEMISTRY 🧪"],
-            ["BIOLOGY 🌱", "MATHS 📐"],
-            ["ENGLISH 📄"]
-        ]
-
-    else:  # Class 12th
+    else:
         keyboard = [
             ["PHYSICS ⚛️", "CHEMISTRY 🧪"],
             ["BIOLOGY 🌱", "MATHS 📐"],
@@ -138,14 +137,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "📞 Contact Us":
         active_users.add(user_id)
 
+        keyboard = [["🧹 Clear History", "❌ End Chat"]]
+
         await update.message.reply_text(
-            "StudyGPT Support Team\n(3 min inactivity timeout)"
+            "StudyGPT Support Team:\n\n💬 Need help? Send your message here and our team will get back to you directly! 🚀 ",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
 
         if user_id in user_timers:
             user_timers[user_id].cancel()
 
         user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
+        return
+
+    # ===== CLEAR HISTORY =====
+    if text == "🧹 Clear History" and user_id in active_users:
+
+        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
+            try:
+                await context.bot.delete_message(user_id, user_msg_id)
+            except:
+                pass
+
+            try:
+                await context.bot.delete_message(ADMIN_ID, admin_msg_id)
+            except:
+                pass
+
+        chat_messages[user_id] = []
+
+        await update.message.reply_text("🧹 History cleared!")
+        return
+
+    # ===== END CHAT =====
+    if text == "❌ End Chat" and user_id in active_users:
+        active_users.discard(user_id)
+        await update.message.reply_text("Chat ended.")
         return
 
     # ===== CHAT =====
@@ -157,9 +184,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user = update.message.from_user
 
-        await context.bot.send_message(
+        admin_msg = await context.bot.send_message(
             ADMIN_ID,
             f"{user.first_name}\n🆔 {user_id}\n\n{text}"
+        )
+
+        chat_messages.setdefault(user_id, []).append(
+            (update.message.message_id, admin_msg.message_id)
         )
         return
 
