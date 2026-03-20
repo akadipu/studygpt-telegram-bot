@@ -266,5 +266,5 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(MessageHandler(~filters.COMMAND, handle_message))
 
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 8080))
     flask_app.run(host="0.0.0.0", port=port)
