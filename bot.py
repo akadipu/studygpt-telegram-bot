@@ -128,42 +128,111 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ================= CONTACT SYSTEM =================
 
+    # ===== CONTACT =====
     if text == "📞 Contact Us":
         active_users.add(user_id)
 
+        keyboard = [["🧹 Clear History", "❌ End Chat"]]
+
         await update.message.reply_text(
-            "💬 Support Chat Started\nSend your message...",
-            reply_markup=ReplyKeyboardMarkup(
-                [["🧹 Clear History", "❌ End Chat"]],
-                resize_keyboard=True
-            )
+            "StudyGPT Support Team:\n\n💬 Need help? Send your message here and our team will get back to you directly! 🚀",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
+
+        if user_id in user_timers:
+            user_timers[user_id].cancel()
+
+        user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
         return
 
-    if user_id in active_users and user_id != ADMIN_ID:
+    # ===== CLEAR HISTORY =====
+    if text == "🧹 Clear History" and user_id in active_users:
+        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
+            try:
+                await context.bot.delete_message(user_id, user_msg_id)
+            except:
+                pass
+            try:
+                await context.bot.delete_message(ADMIN_ID, admin_msg_id)
+            except:
+                pass
 
+        chat_messages[user_id] = []
+        await update.message.reply_text("🧹 History cleared!")
+        return
+
+    # ===== END CHAT =====
+    if text == "❌ End Chat" and user_id in active_users:
+
+        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
+            try:
+                await context.bot.delete_message(user_id, user_msg_id)
+            except:
+                pass
+            try:
+                await context.bot.delete_message(ADMIN_ID, admin_msg_id)
+            except:
+                pass
+
+        chat_messages[user_id] = []
+        active_users.discard(user_id)
+
+        await update.message.reply_text("Chat ended & history cleared.")
+        await asyncio.sleep(1)
+        await start(update, context)
+        return
+
+    # ===== CHAT (MEDIA + TEXT) =====
+    if user_id in active_users:
+
+        if user_id in user_timers:
+            user_timers[user_id].cancel()
+
+        user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
+
+        user = update.message
         sender = update.message.from_user
         caption = f"{sender.first_name}\n🆔 {sender.id}"
 
-        if update.message.text:
+        if user.text:
             admin_msg = await context.bot.send_message(
-                ADMIN_ID, f"{caption}\n\n{text}"
+                ADMIN_ID,
+                f"{caption}\n\n{user.text}"
+            )
+        elif user.photo:
+            admin_msg = await context.bot.send_photo(
+                ADMIN_ID,
+                photo=user.photo[-1].file_id,
+                caption=caption
+            )
+        elif user.video:
+            admin_msg = await context.bot.send_video(
+                ADMIN_ID,
+                video=user.video.file_id,
+                caption=caption
+            )
+        elif user.document:
+            admin_msg = await context.bot.send_document(
+                ADMIN_ID,
+                document=user.document.file_id,
+                caption=caption
+            )
+        elif user.audio:
+            admin_msg = await context.bot.send_audio(
+                ADMIN_ID,
+                audio=user.audio.file_id,
+                caption=caption
             )
         else:
             return
 
+        chat_messages.setdefault(user_id, []).append(
+            (update.message.message_id, admin_msg.message_id)
+        )
+
+        # 🔥 MAP ADMIN MESSAGE → USER
         context.bot_data[admin_msg.message_id] = user_id
-        return
 
-    if user_id == ADMIN_ID and update.message.reply_to_message:
-        target = context.bot_data.get(update.message.reply_to_message.message_id)
-        if target:
-            await context.bot.send_message(target, text)
-            return
-
-    if text == "❌ End Chat" and user_id in active_users:
-        active_users.discard(user_id)
-        await start(update, context)
         return
 
     # ================= SEND MESSAGE =================
