@@ -150,6 +150,55 @@ async def show_materials(update, context):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+# ---------------- ADMIN LOGIC (ADD/DELETE) ----------------
+    if user_id == ADMIN_ID:
+        if text in ["➕ Add Material", "❌ Delete Material"]:
+            context.user_data["admin_mode"] = "ADD" if "Add" in text else "DELETE"
+            context.user_data["admin_state"] = "selecting_class"
+            kb = [["Class 9th", "Class 10th"], ["Class 11th", "Class 12th"], ["🛑 Cancel"]]
+            await update.message.reply_text(f"🛠 {context.user_data['admin_mode']} MODE\nSelect Class:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+            return
+
+        if context.user_data.get("admin_state") == "selecting_class" and text != "🛑 Cancel":
+            context.user_data["temp_class"] = text
+            context.user_data["admin_state"] = "selecting_subject"
+            await update.message.reply_text("Type the Subject name (e.g. SCIENCE 🧪):")
+            return
+
+        if context.user_data.get("admin_state") == "selecting_subject":
+            context.user_data["temp_subject"] = text
+            context.user_data["admin_state"] = "selecting_type"
+            kb = [["📚 Lectures", "📝 Notes"], ["🧠 Mindmaps", "📄 PYQs"], ["🛑 Cancel"]]
+            await update.message.reply_text("Select Category:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+            return
+
+        if context.user_data.get("admin_state") == "selecting_type":
+            mode, c, s, t = context.user_data.get("admin_mode"), context.user_data["temp_class"], context.user_data["temp_subject"], text
+            if mode == "DELETE":
+                data = load_data()
+                if c in data["categories"] and s in data["categories"][c] and t in data["categories"][c][s]:
+                    del data["categories"][c][s][t]
+                    save_data(data)
+                    await update.message.reply_text(f"🗑 Deleted {t} for {s}.")
+                else: await update.message.reply_text("❌ No data found.")
+                context.user_data.clear()
+                return
+            else:
+                context.user_data["temp_type"] = t
+                context.user_data["admin_state"] = "uploading"
+                await update.message.reply_text(f"📤 Send the File or Link for {s}:")
+                return
+
+        if context.user_data.get("admin_state") == "uploading":
+            f_id = update.message.document.file_id if update.message.document else (update.message.photo[-1].file_id if update.message.photo else update.message.text)
+            if f_id:
+                data = load_data()
+                c, s, t = context.user_data["temp_class"], context.user_data["temp_subject"], context.user_data["temp_type"]
+                data.setdefault("categories", {}).setdefault(c, {}).setdefault(s, {}).setdefault(t, []).append(f_id)
+                save_data(data)
+                await update.message.reply_text("✅ Added successfully!")
+                context.user_data.clear()
+                return
     text = update.message.text if update.message.text else ""
 
     data = load_data()
@@ -356,8 +405,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["last"] = "main"
         await show_subjects(update, context)
 
-# ================= MAIN =================
+    
+    # ---------------- SUBJECT SELECTION ----------------
+    subjects_list = ["SCIENCE 🧪", "MATHEMATICS 📐", "ECONOMICS 💳", "HISTORY 🏆", "PHYSICS ⚛️", "CHEMISTRY 🧪", "BIOLOGY 🌱", "MATHS 📐", "ENGLISH 📄"]
+    if any(s in text for s in subjects_list):
+        context.user_data["subject"] = text
+        context.user_data["last"] = "class"
+        await show_materials(update, context)
+        return
 
+
+# ================= MAIN =================
+# ---------------- USER FETCHING DATA ----------------
+    if text in ["📚 Lectures", "📝 Notes", "🧠 Mindmaps", "📄 PYQs"]:
+        data = load_data()
+        c, s = context.user_data.get("class"), context.user_data.get("subject")
+        try:
+            files = data["categories"][c][s][text]
+            for f_id in files:
+                if "http" in str(f_id): await update.message.reply_text(f"🔗 Link: {f_id}")
+                else: await context.bot.send_document(user_id, f_id)
+        except:
+            await update.message.reply_text("📍 No materials uploaded here yet.")
+        return
+        
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
