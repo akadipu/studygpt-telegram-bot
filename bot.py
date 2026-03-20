@@ -1,21 +1,17 @@
 import os
 import json
 import asyncio
-from telegram import (
-    Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
-)
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
+    ContextTypes, filters
 )
 
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 8558716745
-
 DATA_FILE = "data.json"
 
 active_users = set()
-chat_messages = {}
 user_timers = {}
 
 # ================= DATA =================
@@ -31,214 +27,280 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-def get_next_id(data):
-    all_ids = []
-    for cat in data["categories"].values():
-        for item in cat:
-            all_ids.append(item["id"])
-    return max(all_ids, default=0) + 1
-
-# ================= SESSION EXPIRY =================
+# ================= SESSION =================
 
 async def expire_chat(user_id, context):
     await asyncio.sleep(180)
-
     if user_id in active_users:
         active_users.discard(user_id)
-
-        msgs = chat_messages.get(user_id, [])
-
-        for user_msg_id, _ in msgs:
-            try:
-                await context.bot.delete_message(user_id, user_msg_id)
-            except:
-                pass
-
-        chat_messages[user_id] = []
-
         try:
-            await context.bot.send_message(
-                user_id,
-                "Session expired due to inactivity."
-            )
+            await context.bot.send_message(user_id, "Session expired.")
         except:
             pass
-
-        user_timers.pop(user_id, None)
 
 # ================= START =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+
     keyboard = [
         ["Class 9th", "Class 10th"],
         ["Class 11th", "Class 12th"],
         ["📞 Contact Us"]
     ]
 
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
     await update.message.reply_text(
-        "StudyGPT: Ace your exams with Handwritten Notes, Minmaps, and Solved PYQs! 😎\n\nChoose your class 👇",
-        reply_markup=reply_markup
+        "Choose your class 👇",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
-# ================= ADMIN PANEL =================
+# ================= ADMIN =================
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return
 
-    keyboard = [
-        [InlineKeyboardButton("➕ Add Category", callback_data="add_cat")],
-        [InlineKeyboardButton("➕ Add Material", callback_data="add_mat")],
-        [InlineKeyboardButton("✏️ Edit Material", callback_data="edit_mat")],
-        [InlineKeyboardButton("❌ Delete Material", callback_data="delete_mat")]
-    ]
+    keyboard = [["➕ Add Material"]]
 
     await update.message.reply_text(
-        "Admin Panel",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "Admin Panel 👨‍💻",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
-# ================= BUTTON HANDLER =================
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-
-    if user_id != ADMIN_ID:
-        return
-
-    if query.data == "add_cat":
-        context.user_data["action"] = "add_category"
-        await query.message.reply_text("Send category name:")
-
-    elif query.data == "add_mat":
-        context.user_data["action"] = "choose_category"
-        await query.message.reply_text("Send category name:")
-
-    elif query.data == "edit_mat":
-        context.user_data["action"] = "edit_id"
-        await query.message.reply_text("Send ID:")
-
-    elif query.data == "delete_mat":
-        context.user_data["action"] = "delete"
-        await query.message.reply_text("Send ID:")
-
-# ================= MESSAGE HANDLER =================
+# ================= HANDLER =================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text
     data = load_data()
-    action = context.user_data.get("action")
 
-    # ===== ADMIN =====
+    # ===== MAIN MENU =====
+    if text == "🏠 Main Menu":
+        await start(update, context)
+        return
+
+    # ===== BACK =====
+    if text == "⬅ Back":
+        last = context.user_data.get("last")
+
+        if last == "main":
+            await start(update, context)
+        elif last == "class":
+            await show_classes(update, context)
+        elif last == "subject":
+            await show_subjects(update, context)
+        else:
+            await start(update, context)
+        return
+
+    # ===== CONTACT =====
+    if text == "📞 Contact Us":
+        active_users.add(user_id)
+
+        await update.message.reply_text(
+            "StudyGPT Support Team\n(3 min inactivity timeout)"
+        )
+
+        if user_id in user_timers:
+            user_timers[user_id].cancel()
+
+        user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
+        return
+
+    # ===== CHAT =====
+    if user_id in active_users:
+        if user_id in user_timers:
+            user_timers[user_id].cancel()
+
+        user_timers[user_id] = asyncio.create_task(expire_chat(user_id, context))
+
+        user = update.message.from_user
+
+        await context.bot.send_message(
+            ADMIN_ID,
+            f"{user.first_name}\n🆔 {user_id}\n\n{text}"
+        )
+        return
+
+    # ================= ADMIN FLOW =================
+
     if user_id == ADMIN_ID:
 
-        if action == "add_category":
-            data["categories"][text] = []
-            save_data(data)
-            context.user_data.clear()
+        if text == "➕ Add Material":
+            context.user_data["admin_step"] = "class"
 
-        elif action == "choose_category":
-            context.user_data["category"] = text
-            context.user_data["action"] = "add_text"
+            keyboard = [
+                ["Class 9th", "Class 10th"],
+                ["Class 11th", "Class 12th"]
+            ]
 
-        elif action == "add_text":
-            new_id = get_next_id(data)
-            data["categories"].setdefault(
-                context.user_data["category"], []
-            ).append({"id": new_id, "text": text})
+            await update.message.reply_text(
+                "Select Class",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+            return
 
-            save_data(data)
-            context.user_data.clear()
+        elif context.user_data.get("admin_step") == "class":
+            context.user_data["class"] = text
+            context.user_data["admin_step"] = "subject"
 
-        elif action == "delete":
-            for cat in data["categories"]:
-                data["categories"][cat] = [
-                    i for i in data["categories"][cat] if i["id"] != int(text)
+            await show_subjects(update, context)
+            return
+
+        elif context.user_data.get("admin_step") == "subject":
+            context.user_data["subject"] = text
+            context.user_data["admin_step"] = "type"
+
+            cls = context.user_data["class"]
+
+            if cls == "Class 9th" or cls == "Class 11th":
+                keyboard = [
+                    ["Lectures 📚", "Handwritten Notes 📝"],
+                    ["NCERT Exercises ✍️", "Mindmaps 🤩"]
                 ]
+            elif cls == "Class 12th":
+                keyboard = [
+                    ["Lectures 🎥", "Handwritten Notes 📝"],
+                    ["NCERT Exercises ✍️", "Mindmaps 🔥"],
+                    ["PYQs 📄"]
+                ]
+            else:
+                keyboard = [
+                    ["Lectures 📚", "Handwritten Notes 📝"],
+                    ["NCERT Exercises ✍️", "Mindmaps 🤩"],
+                    ["PYQs 📄"],
+                    ["Top 100 Most Expected Questions 😎"]
+                ]
+
+            await update.message.reply_text(
+                "Select Content Type",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+            return
+
+        elif context.user_data.get("admin_step") == "type":
+            context.user_data["type"] = text
+            context.user_data["admin_step"] = "final"
+
+            await update.message.reply_text("Send material")
+            return
+
+        elif context.user_data.get("admin_step") == "final":
+            key = f"{context.user_data['class']}|{context.user_data['subject']}|{context.user_data['type']}"
+
+            data["categories"].setdefault(key, []).append({"text": text})
             save_data(data)
+
+            await update.message.reply_text("✅ Added")
             context.user_data.clear()
+            return
 
-        elif action == "edit_id":
-            context.user_data["edit_id"] = int(text)
-            context.user_data["action"] = "edit_text"
+    # ================= USER FLOW =================
 
-        elif action == "edit_text":
-            for cat in data["categories"]:
-                for item in data["categories"][cat]:
-                    if item["id"] == context.user_data["edit_id"]:
-                        item["text"] = text
-            save_data(data)
-            context.user_data.clear()
+    if text in ["Class 9th", "Class 10th", "Class 11th", "Class 12th"]:
+        context.user_data["class"] = text
+        context.user_data["last"] = "main"
+        await show_subjects(update, context)
 
-        elif update.message.reply_to_message:
-            try:
-                original = update.message.reply_to_message.text
-                target_id = int(original.split("🆔")[1].strip())
+    elif text in [
+        "SCIENCE 🧪", "MATHEMATICS 📐", "ECONOMICS 💳",
+        "HISTORY 🏆", "POL. SCIENCE 👮", "GEOGRAPHY 🌍",
+        "ENGLISH 📄", "PHYSICS ⚛️", "CHEMISTRY 🧪",
+        "BIOLOGY 🌱", "MATHS 📐"
+    ]:
+        context.user_data["subject"] = text
+        context.user_data["last"] = "class"
 
-                await context.bot.send_message(
-                    target_id,
-                    f"StudyGPT Support Team\n\n{text}"
-                )
-            except:
-                pass
+        cls = context.user_data.get("class")
 
-    # ===== USER CLASS BUTTONS =====
-    elif text in ["Class 9th", "Class 10th", "Class 11th", "Class 12th"]:
+        if cls == "Class 9th":
+            keyboard = [
+                ["Lectures 📚", "Handwritten Notes 📝"],
+                ["NCERT Exercises ✍️", "Mindmaps 🤩"]
+            ]
+        elif cls == "Class 11th":
+            keyboard = [
+                ["Lectures 🎥", "Handwritten Notes 📝"],
+                ["NCERT Exercises ✍️", "Mindmaps 🔥"]
+            ]
+        elif cls == "Class 12th":
+            keyboard = [
+                ["Lectures 🎥", "Handwritten Notes 📝"],
+                ["NCERT Exercises ✍️", "Mindmaps 🔥"],
+                ["PYQs 📄"]
+            ]
+        else:
+            keyboard = [
+                ["Lectures 📚", "Handwritten Notes 📝"],
+                ["NCERT Exercises ✍️", "Mindmaps 🤩"],
+                ["PYQs 📄"],
+                ["Top 100 Most Expected Questions 😎"]
+            ]
 
-        materials = data["categories"].get(text, [])
+        keyboard.append(["⬅ Back", "🏠 Main Menu"])
+
+        await update.message.reply_text(
+            "Choose content 👇",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+
+    # ===== FETCH DATA =====
+    elif text in [
+        "Lectures 📚", "Lectures 🎥",
+        "Handwritten Notes 📝",
+        "NCERT Exercises ✍️",
+        "Mindmaps 🤩", "Mindmaps 🔥",
+        "PYQs 📄",
+        "Top 100 Most Expected Questions 😎"
+    ]:
+
+        key = f"{context.user_data.get('class')}|{context.user_data.get('subject')}|{text}"
+
+        materials = data["categories"].get(key, [])
 
         if not materials:
-            await update.message.reply_text("No material available yet.")
+            await update.message.reply_text("No material yet.")
             return
 
         for item in materials:
             await update.message.reply_text(item["text"])
 
-    # ===== CONTACT =====
-    elif text == "📞 Contact Us":
-        active_users.add(user_id)
+# ================= SUBJECT MENU =================
 
-        await update.message.reply_text(
-            "Connected to StudyGPT Support Team.\n(3 min inactivity timeout)"
-        )
+async def show_subjects(update, context):
+    cls = context.user_data.get("class")
 
-        if user_id in user_timers:
-            user_timers[user_id].cancel()
+    if cls == "Class 9th":
+        keyboard = [["SCIENCE 🧪", "MATHEMATICS 📐"]]
 
-        user_timers[user_id] = asyncio.create_task(
-            expire_chat(user_id, context)
-        )
+    elif cls == "Class 10th":
+        keyboard = [
+            ["SCIENCE 🧪", "MATHEMATICS 📐"],
+            ["ECONOMICS 💳", "HISTORY 🏆"],
+            ["POL. SCIENCE 👮", "GEOGRAPHY 🌍"],
+            ["ENGLISH 📄"]
+        ]
 
-    # ===== USER → ADMIN =====
-    elif user_id in active_users:
-
-        if user_id in user_timers:
-            user_timers[user_id].cancel()
-
-        user_timers[user_id] = asyncio.create_task(
-            expire_chat(user_id, context)
-        )
-
-        user = update.message.from_user
-        name = user.first_name
-        username = f"@{user.username}" if user.username else "No username"
-
-        admin_msg = await context.bot.send_message(
-            ADMIN_ID,
-            f"{name} ({username})\n🆔 {user_id}\n\n{text}"
-        )
-
-        chat_messages.setdefault(user_id, []).append(
-            (update.message.message_id, admin_msg.message_id)
-        )
+    elif cls == "Class 11th":
+        keyboard = [
+            ["PHYSICS ⚛️", "CHEMISTRY 🧪"],
+            ["BIOLOGY 🌱", "MATHS 📐"],
+            ["ENGLISH 📄"]
+        ]
 
     else:
-        await update.message.reply_text("Use buttons.")
+        keyboard = [
+            ["PHYSICS ⚛️", "CHEMISTRY 🧪"],
+            ["BIOLOGY 🌱", "MATHS 📐"],
+            ["ENGLISH 📄"]
+        ]
+
+    keyboard.append(["⬅ Back", "🏠 Main Menu"])
+
+    await update.message.reply_text(
+        f"{cls} Subjects",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
 
 # ================= MAIN =================
 
@@ -246,7 +308,6 @@ app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("admin", admin))
-app.add_handler(CallbackQueryHandler(button_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 app.run_polling()
