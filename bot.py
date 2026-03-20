@@ -145,7 +145,20 @@ async def show_materials(update, context):
         context.user_data.get("subject"),
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
+    
+# ===== SUBJECT SELECT =====
+subjects_9_10 = ["SCIENCE 🧪", "MATHEMATICS 📐", "ECONOMICS 💳",
+                 "HISTORY 🏆", "POL. SCIENCE 👮", "GEOGRAPHY 🌍", "ENGLISH 📄"]
 
+subjects_11_12 = ["PHYSICS ⚛️", "CHEMISTRY 🧪",
+                  "BIOLOGY 🌱", "MATHS 📐", "ENGLISH 📄"]
+
+if text in subjects_9_10 + subjects_11_12:
+    context.user_data["subject"] = text
+    context.user_data["last"] = "class"
+    await show_materials(update, context)
+    return
+    
 # ================= HANDLER =================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
