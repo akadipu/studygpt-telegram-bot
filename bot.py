@@ -147,17 +147,17 @@ async def show_materials(update, context):
     )
     
 # ===== SUBJECT SELECT =====
-subjects_9_10 = ["SCIENCE 🧪", "MATHEMATICS 📐", "ECONOMICS 💳",
+    subjects_9_10 = ["SCIENCE 🧪", "MATHEMATICS 📐", "ECONOMICS 💳",
                  "HISTORY 🏆", "POL. SCIENCE 👮", "GEOGRAPHY 🌍", "ENGLISH 📄"]
 
-subjects_11_12 = ["PHYSICS ⚛️", "CHEMISTRY 🧪",
+    subjects_11_12 = ["PHYSICS ⚛️", "CHEMISTRY 🧪",
                   "BIOLOGY 🌱", "MATHS 📐", "ENGLISH 📄"]
 
-if text in subjects_9_10 + subjects_11_12:
-    context.user_data["subject"] = text
-    context.user_data["last"] = "class"
-    await show_materials(update, context)
-    return
+    if text in subjects_9_10 + subjects_11_12:
+        context.user_data["subject"] = text
+        context.user_data["last"] = "class"
+        await show_materials(update, context)
+        return
     
 # ================= HANDLER =================
 
