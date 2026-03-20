@@ -1,9 +1,7 @@
 import os
 import json
 import asyncio
-import time
 from collections import deque
-from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -23,12 +21,6 @@ user_timers       = {}          # inactivity auto-close tasks  {user_id: Task}
 chat_messages     = {}          # {user_id: [(user_msg_id, admin_msg_id), ...]}
 admin_active_user = None
 
-# ── last-seen timestamps ───────────────────────────────────────────────────────
-# {user_id: float}  — unix timestamp of last message sent by that user
-user_last_seen    = {}
-# unix timestamp of last message sent by admin (to any user)
-admin_last_seen   = 0.0
-
 # ── delivered/read status message IDs ─────────────────────────────────────────
 # When user sends a message we send a small "✅ Delivered" status line to the user.
 # When admin opens the DM (admin_open_chat) we upgrade it to "👀 Seen by Admin".
@@ -43,16 +35,6 @@ recent_contacts_order = deque(maxlen=MAX_RECENT)
 # ══════════════════════════════════════════════════════════════════════════════
 # UTILITIES
 # ══════════════════════════════════════════════════════════════════════════════
-
-def fmt_time(ts: float) -> str:
-    """Format a unix timestamp as a friendly 'Today HH:MM' or 'DD Mon HH:MM'."""
-    if ts == 0:
-        return "never"
-    dt = datetime.fromtimestamp(ts)
-    now = datetime.now()
-    if dt.date() == now.date():
-        return f"Today {dt.strftime('%I:%M %p')}"
-    return dt.strftime("%d %b %I:%M %p")
 
 def load_data():
     try:
@@ -102,21 +84,6 @@ def admin_panel_keyboard():
     )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TYPING INDICATOR
-# Send "Admin is typing…" to user, pause briefly, then delete it.
-# The real message arrives right after — feels like a real DM.
-# ══════════════════════════════════════════════════════════════════════════════
-
-async def show_typing(bot, user_id: int, seconds: float = 1.5):
-    """Send a temporary 'Admin is typing…' bubble, wait, then delete it."""
-    try:
-        typing_msg = await bot.send_message(user_id, "✍️ Admin is typing…")
-        await asyncio.sleep(seconds)
-        await bot.delete_message(user_id, typing_msg.message_id)
-    except Exception:
-        pass
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DELIVERED / READ STATUS
@@ -149,8 +116,7 @@ async def set_seen(bot, user_id: int):
         except Exception:
             pass
     try:
-        seen_time = fmt_time(time.time())
-        m = await bot.send_message(user_id, f"👀 Seen by Admin  •  {seen_time}")
+        m = await bot.send_message(user_id, "👀 Seen by Admin")
         user_status_msg[user_id] = m.message_id
     except Exception:
         pass
@@ -416,9 +382,7 @@ async def admin_show_recent(update, context):
         name      = info.get("name", "Unknown")
         uname     = info.get("username", "")
         online    = "🟢" if uid in active_users else "🔴"
-        last_ts   = user_last_seen.get(uid, 0)
-        last_seen = fmt_time(last_ts)
-        lines.append(f"{i}. {online} {name} {uname}  •  last seen {last_seen}  [ID: {uid}]")
+        lines.append(f"{i}. {online} {name} {uname}  [ID: {uid}]")
 
     kb = [[str(i)] for i in range(1, len(ids_list) + 1)] + [["🛑 Exit to Panel"]]
     await update.message.reply_text(
@@ -437,13 +401,10 @@ async def admin_open_chat(update, context, target_user_id: int):
     name   = info.get("name", str(target_user_id))
     uname  = info.get("username", "")
     status = "🟢 Online" if target_user_id in active_users else "🔴 Offline"
-    last_ts   = user_last_seen.get(target_user_id, 0)
-    last_seen = fmt_time(last_ts)
 
     await update.message.reply_text(
         f"💬 Now chatting with: {name} {uname}\n"
-        f"🆔 {target_user_id}  |  {status}\n"
-        f"🕐 Last seen: {last_seen}\n\n"
+        f"🆔 {target_user_id}  |  {status}\n\n"
         f"Just type or send anything — it goes straight to them.\n"
         f"Swipe-reply any forwarded message for a quoted reply.",
         reply_markup=admin_chat_keyboard()
@@ -517,7 +478,7 @@ async def admin_end_chat(update, context):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global admin_active_user, admin_last_seen
+    global admin_active_user
 
     msg     = update.message
     user_id = msg.from_user.id
@@ -573,9 +534,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ── ADMIN IN LIVE DM MODE ──────────────────────────────────────────────
         if admin_mode == "live_chat" and admin_active_user:
             target = admin_active_user
-
-            # Update admin last-seen timestamp
-            admin_last_seen = time.time()
 
             # Reset inactivity timer (admin just spoke)
             if target in active_users:
@@ -785,7 +743,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "📞 Contact Us":
         active_users.add(user_id)
         track_contact(user_id, msg.from_user)
-        user_last_seen[user_id] = time.time()
 
         await msg.reply_text(
             "StudyGPT Support Team:\n\n"
@@ -869,9 +826,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── ACTIVE CONTACT-US CHAT: forward user → admin ───────────────────────────
     if user_id in active_users:
-        # update last-seen
-        user_last_seen[user_id] = time.time()
-
         # reset inactivity timer (user just spoke)
         reset_inactivity_timer(user_id, context)
 
@@ -947,44 +901,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.update({"material_type": text, "last": "material"})
         await show_content(update, context)
         return
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TYPING INDICATOR HOOK
-# We wrap the admin live-chat send so typing indicator appears BEFORE the msg.
-# This is done by patching the live_chat block's forward call with a pre-step.
-# ══════════════════════════════════════════════════════════════════════════════
-# (Already handled inline: show_typing() is called before forward_any()
-#  inside the live_chat block — see below patch)
-
-# Re-patch live_chat block to include typing indicator
-_original_handle = handle_message
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global admin_active_user, admin_last_seen
-
-    msg     = update.message
-    user_id = msg.from_user.id
-
-    # Intercept admin live_chat sends to inject typing indicator
-    if user_id == ADMIN_ID:
-        admin_mode = context.user_data.get("admin_mode", "")
-        if admin_mode == "live_chat" and admin_active_user:
-            target = admin_active_user
-            text   = msg.text or ""
-
-            # skip control buttons — they're handled by original function
-            control_buttons = {
-                "🧹 Clear History", "❌ End Chat",
-                "👥 Recent Contacts", "🛑 Exit to Panel",
-                "🛑 Safe Exit", "🚪 Exit Admin Mode", "🏠 Main Menu"
-            }
-            if text not in control_buttons:
-                # Show typing indicator to user before the real message lands
-                if target in active_users:
-                    await show_typing(context.bot, target, seconds=1.2)
-
-    await _original_handle(update, context)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
