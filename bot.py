@@ -27,6 +27,12 @@ first_msg_sent    = set()
 # {user_id: status_msg_id} — the delivered/seen bubble message ID
 user_status_msg   = {}
 
+# {user_id: message_id} — the /chat command message to delete on session end
+chat_cmd_msg      = {}
+
+# {user_id: message_id} — the bot's reply to /chat to delete on session end
+chat_bot_msg      = {}
+
 # ── recent contacts ────────────────────────────────────────────────────────────
 recent_contacts       = {}
 recent_contacts_order = deque(maxlen=MAX_RECENT)
@@ -205,10 +211,20 @@ async def delete_all_messages(bot, user_id: int):
         tasks.append(bot.delete_message(user_id, user_msg_id))
         tasks.append(bot.delete_message(ADMIN_ID, admin_msg_id))
 
-    # also delete status bubble if present
+    # delete status bubble if present
     status_mid = user_status_msg.pop(user_id, None)
     if status_mid:
         tasks.append(bot.delete_message(user_id, status_mid))
+
+    # delete the /chat command message if present
+    cmd_mid = chat_cmd_msg.pop(user_id, None)
+    if cmd_mid:
+        tasks.append(bot.delete_message(user_id, cmd_mid))
+
+    # delete the bot's reply to /chat if present
+    bot_mid = chat_bot_msg.pop(user_id, None)
+    if bot_mid:
+        tasks.append(bot.delete_message(user_id, bot_mid))
 
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -269,8 +285,7 @@ def admin_chat_keyboard():
 def main_menu_keyboard():
     return ReplyKeyboardMarkup(
         [["Class 9th",  "Class 10th"],
-         ["Class 11th", "Class 12th"],
-         ["📞 Contact Us"]],
+         ["Class 11th", "Class 12th"]],
         resize_keyboard=True
     )
 
@@ -364,6 +379,44 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Admin Panel 👨‍💻\n\nWhat would you like to do?",
         reply_markup=admin_panel_keyboard()
     )
+
+
+async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Open hidden support chat session via /chat command."""
+    user_id = update.message.from_user.id
+
+    # store the /chat message ID so we can delete it later
+    chat_cmd_msg[user_id] = update.message.message_id
+
+    active_users.add(user_id)
+    track_contact(user_id, update.message.from_user)
+
+    sent = await context.bot.send_message(
+        user_id,
+        "💬 Support chat opened.\n\n"
+        "Send your message and our team will reply directly! 🚀\n\n"
+        "⏳ Auto-closes after 2 minutes of inactivity.",
+        reply_markup=ReplyKeyboardMarkup(
+            [["🧹 Clear History", "❌ End Chat"]], resize_keyboard=True
+        )
+    )
+    chat_bot_msg[user_id] = sent.message_id
+
+    # notify admin
+    info  = recent_contacts.get(user_id, {})
+    name  = info.get("name", str(user_id))
+    uname = info.get("username", "")
+    try:
+        await context.bot.send_message(
+            ADMIN_ID,
+            f"🔔 New contact from {name} {uname} [ID: {user_id}]\n\n"
+            f"Use 👥 Recent Contacts → select number to open DM.",
+            reply_markup=admin_panel_keyboard()
+        )
+    except Exception:
+        pass
+
+    reset_inactivity_timer(user_id, context)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -694,36 +747,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:                    await start(update, context)
         return
 
-    # ── CONTACT US ─────────────────────────────────────────────────────────────
-    if text == "📞 Contact Us":
-        active_users.add(user_id)
-        track_contact(user_id, msg.from_user)
-
-        await msg.reply_text(
-            "StudyGPT Support Team:\n\n"
-            "💬 Send your message here and our team will reply directly! 🚀\n\n"
-            "⏳ Note: Chat auto-closes after 2 minutes of inactivity.",
-            reply_markup=ReplyKeyboardMarkup(
-                [["🧹 Clear History", "❌ End Chat"]], resize_keyboard=True
-            )
-        )
-
-        info  = recent_contacts.get(user_id, {})
-        name  = info.get("name", str(user_id))
-        uname = info.get("username", "")
-        try:
-            await context.bot.send_message(
-                ADMIN_ID,
-                f"🔔 New contact from {name} {uname} [ID: {user_id}]\n\n"
-                f"Use 👥 Recent Contacts → select number to open DM.",
-                reply_markup=admin_panel_keyboard()
-            )
-        except Exception:
-            pass
-
-        reset_inactivity_timer(user_id, context)
-        return
-
     # ── USER: CLEAR HISTORY ────────────────────────────────────────────────────
     if text == "🧹 Clear History" and user_id in active_users:
         await delete_all_messages(context.bot, user_id)
@@ -834,6 +857,7 @@ app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("admin", admin_cmd))
+app.add_handler(CommandHandler("chat",  chat_cmd))
 app.add_handler(MessageHandler(~filters.COMMAND, handle_message))
 
 app.run_polling()
