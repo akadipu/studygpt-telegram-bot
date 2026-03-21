@@ -16,14 +16,15 @@ INACTIVITY_SECONDS = 120   # 2 minutes → auto-close
 
 # ── runtime state ──────────────────────────────────────────────────────────────
 active_users      = set()
-user_timers       = {}          # inactivity auto-close tasks  {user_id: Task}
-chat_messages     = {}          # {user_id: [(user_msg_id, admin_msg_id), ...]}
+user_timers       = {}
+chat_messages     = {}
 admin_active_user = None
 
-# ── delivered/read status message IDs ─────────────────────────────────────────
-# When user sends a message we send a small "✅ Delivered" status line to the user.
-# When admin opens the DM (admin_open_chat) we upgrade it to "👀 Seen by Admin".
-# {user_id: status_message_id}  — the current status bubble in user's chat
+# tracks which users have already sent their first message this session
+# used to show delivered/seen bubble only on first message
+first_msg_sent    = set()
+
+# {user_id: status_msg_id} — the delivered/seen bubble message ID
 user_status_msg   = {}
 
 # ── recent contacts ────────────────────────────────────────────────────────────
@@ -199,9 +200,6 @@ LINKS = {
 async def delete_all_messages(bot, user_id: int):
     """Delete all bridged messages for user_id from both sides instantly using gather."""
     pairs = chat_messages.get(user_id, [])
-    if not pairs:
-        return
-
     tasks = []
     for user_msg_id, admin_msg_id in pairs:
         tasks.append(bot.delete_message(user_id, user_msg_id))
@@ -212,8 +210,40 @@ async def delete_all_messages(bot, user_id: int):
     if status_mid:
         tasks.append(bot.delete_message(user_id, status_mid))
 
-    await asyncio.gather(*tasks, return_exceptions=True)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
     chat_messages[user_id] = []
+    first_msg_sent.discard(user_id)
+
+
+async def set_delivered(bot, user_id: int):
+    """Show ✅ Delivered bubble in user's chat (only on first message)."""
+    old = user_status_msg.pop(user_id, None)
+    if old:
+        try:
+            await bot.delete_message(user_id, old)
+        except Exception:
+            pass
+    try:
+        m = await bot.send_message(user_id, "✅ Delivered")
+        user_status_msg[user_id] = m.message_id
+    except Exception:
+        pass
+
+
+async def set_seen(bot, user_id: int):
+    """Upgrade ✅ Delivered → 👀 Seen by Admin."""
+    old = user_status_msg.pop(user_id, None)
+    if old:
+        try:
+            await bot.delete_message(user_id, old)
+        except Exception:
+            pass
+    try:
+        m = await bot.send_message(user_id, "👀 Seen by Admin")
+        user_status_msg[user_id] = m.message_id
+    except Exception:
+        pass
 
 
 def track_contact(user_id: int, sender):
@@ -255,35 +285,6 @@ def admin_panel_keyboard():
 # ══════════════════════════════════════════════════════════════════════════════
 # DELIVERED / READ STATUS
 # ══════════════════════════════════════════════════════════════════════════════
-
-async def set_delivered(bot, user_id: int):
-    """Post (or replace) the status bubble in the user's chat with ✅ Delivered."""
-    old = user_status_msg.pop(user_id, None)
-    if old:
-        try:
-            await bot.delete_message(user_id, old)
-        except Exception:
-            pass
-    try:
-        m = await bot.send_message(user_id, "✅ Delivered")
-        user_status_msg[user_id] = m.message_id
-    except Exception:
-        pass
-
-
-async def set_seen(bot, user_id: int):
-    """Upgrade the status bubble to 👀 Seen by Admin."""
-    old = user_status_msg.pop(user_id, None)
-    if old:
-        try:
-            await bot.delete_message(user_id, old)
-        except Exception:
-            pass
-    try:
-        m = await bot.send_message(user_id, "👀 Seen by Admin")
-        user_status_msg[user_id] = m.message_id
-    except Exception:
-        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -549,7 +550,9 @@ async def admin_open_chat(update, context, target_user_id: int):
         reply_markup=admin_chat_keyboard()
     )
 
-    await set_seen(context.bot, target_user_id)
+    # upgrade delivered → seen only if user already sent first message
+    if target_user_id in first_msg_sent:
+        await set_seen(context.bot, target_user_id)
 
     if target_user_id in active_users:
         reset_inactivity_timer(target_user_id, context)
@@ -780,12 +783,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 context.bot_data[f"admin_msg_{admin_msg.message_id}"] = user_id
 
-                await set_delivered(context.bot, user_id)
+                # show ✅ Delivered bubble only on first message of session
+                if user_id not in first_msg_sent:
+                    first_msg_sent.add(user_id)
+                    await set_delivered(context.bot, user_id)
 
-                if admin_active_user == user_id:
-                    await asyncio.sleep(0.5)
-                    await set_seen(context.bot, user_id)
-                else:
+                if admin_active_user != user_id:
                     ids_newest_first = list(reversed(recent_contacts_order))
                     try:
                         pos = ids_newest_first.index(user_id) + 1
