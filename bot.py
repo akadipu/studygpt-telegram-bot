@@ -47,6 +47,26 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
+async def delete_all_messages(bot, user_id: int):
+    """Delete all bridged messages for user_id from both sides instantly using gather."""
+    pairs = chat_messages.get(user_id, [])
+    if not pairs:
+        return
+
+    tasks = []
+    for user_msg_id, admin_msg_id in pairs:
+        tasks.append(bot.delete_message(user_id, user_msg_id))
+        tasks.append(bot.delete_message(ADMIN_ID, admin_msg_id))
+
+    # also delete status bubble if present
+    status_mid = user_status_msg.pop(user_id, None)
+    if status_mid:
+        tasks.append(bot.delete_message(user_id, status_mid))
+
+    await asyncio.gather(*tasks, return_exceptions=True)
+    chat_messages[user_id] = []
+
+
 def track_contact(user_id: int, sender):
     name     = (sender.full_name or sender.first_name or "").strip()
     username = f"@{sender.username}" if sender.username else ""
@@ -137,22 +157,8 @@ async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
 
     global admin_active_user
 
-    # delete all bridged messages
-    for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
-        for chat_id, mid in [(user_id, user_msg_id), (ADMIN_ID, admin_msg_id)]:
-            try:
-                await context.bot.delete_message(chat_id, mid)
-            except Exception:
-                pass
-    chat_messages[user_id] = []
-
-    # clean up status bubble
-    old = user_status_msg.pop(user_id, None)
-    if old:
-        try:
-            await context.bot.delete_message(user_id, old)
-        except Exception:
-            pass
+    # delete all bridged messages instantly
+    await delete_all_messages(context.bot, user_id)
 
     active_users.discard(user_id)
 
@@ -422,20 +428,7 @@ async def admin_clear_history(update, context):
     uid = admin_active_user
     if not uid:
         return
-    for user_msg_id, admin_msg_id in chat_messages.get(uid, []):
-        for chat_id, mid in [(uid, user_msg_id), (ADMIN_ID, admin_msg_id)]:
-            try:
-                await context.bot.delete_message(chat_id, mid)
-            except Exception:
-                pass
-    chat_messages[uid] = []
-    # clean status bubble
-    old = user_status_msg.pop(uid, None)
-    if old:
-        try:
-            await context.bot.delete_message(uid, old)
-        except Exception:
-            pass
+    await delete_all_messages(context.bot, uid)
     await update.message.reply_text("🧹 Chat history cleared!", reply_markup=admin_chat_keyboard())
 
 
@@ -443,23 +436,10 @@ async def admin_end_chat(update, context):
     global admin_active_user
     uid = admin_active_user
     if uid:
-        for user_msg_id, admin_msg_id in chat_messages.get(uid, []):
-            for chat_id, mid in [(uid, user_msg_id), (ADMIN_ID, admin_msg_id)]:
-                try:
-                    await context.bot.delete_message(chat_id, mid)
-                except Exception:
-                    pass
-        chat_messages[uid] = []
+        await delete_all_messages(context.bot, uid)
         active_users.discard(uid)
         if uid in user_timers:
             user_timers[uid].cancel()
-        # clean status bubble
-        old = user_status_msg.pop(uid, None)
-        if old:
-            try:
-                await context.bot.delete_message(uid, old)
-            except Exception:
-                pass
         try:
             await context.bot.send_message(uid, "❌ Admin ended the chat session.")
             await asyncio.sleep(0.5)
@@ -772,41 +752,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── USER: CLEAR HISTORY ────────────────────────────────────────────────────
     if text == "🧹 Clear History" and user_id in active_users:
-        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
-            for chat_id, mid in [(user_id, user_msg_id), (ADMIN_ID, admin_msg_id)]:
-                try:
-                    await context.bot.delete_message(chat_id, mid)
-                except Exception:
-                    pass
-        chat_messages[user_id] = []
-        old = user_status_msg.pop(user_id, None)
-        if old:
-            try:
-                await context.bot.delete_message(user_id, old)
-            except Exception:
-                pass
+        await delete_all_messages(context.bot, user_id)
         await msg.reply_text("🧹 History cleared!")
         reset_inactivity_timer(user_id, context)
         return
 
     # ── USER: END CHAT ─────────────────────────────────────────────────────────
     if text == "❌ End Chat" and user_id in active_users:
-        for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
-            for chat_id, mid in [(user_id, user_msg_id), (ADMIN_ID, admin_msg_id)]:
-                try:
-                    await context.bot.delete_message(chat_id, mid)
-                except Exception:
-                    pass
-        chat_messages[user_id] = []
+        await delete_all_messages(context.bot, user_id)
         active_users.discard(user_id)
         if user_id in user_timers:
             user_timers[user_id].cancel()
-        old = user_status_msg.pop(user_id, None)
-        if old:
-            try:
-                await context.bot.delete_message(user_id, old)
-            except Exception:
-                pass
 
         if admin_active_user == user_id:
             try:
