@@ -27,11 +27,14 @@ first_msg_sent    = set()
 # {user_id: status_msg_id} — the delivered/seen bubble message ID
 user_status_msg   = {}
 
-# {user_id: message_id} — the /chat command message to delete on session end
-chat_cmd_msg      = {}
+# {user_id: message_id} — the /support command message to delete on session end
+support_cmd_msg      = {}
 
-# {user_id: message_id} — the bot's reply to /chat to delete on session end
+# {user_id: message_id} — the bot's reply to /support to delete on session end
 chat_bot_msg      = {}
+
+# {user_id: message_id} — the "Welcome Back" message to delete on end/timeout
+welcome_msg       = {}
 
 # ── recent contacts ────────────────────────────────────────────────────────────
 recent_contacts       = {}
@@ -216,15 +219,20 @@ async def delete_all_messages(bot, user_id: int):
     if status_mid:
         tasks.append(bot.delete_message(user_id, status_mid))
 
-    # delete the /chat command message if present
-    cmd_mid = chat_cmd_msg.pop(user_id, None)
+    # delete the /support command message if present
+    cmd_mid = support_cmd_msg.pop(user_id, None)
     if cmd_mid:
         tasks.append(bot.delete_message(user_id, cmd_mid))
 
-    # delete the bot's reply to /chat if present
+    # delete the bot's reply to /support if present
     bot_mid = chat_bot_msg.pop(user_id, None)
     if bot_mid:
         tasks.append(bot.delete_message(user_id, bot_mid))
+
+    # delete the "Welcome Back" message if present
+    welcome_mid = welcome_msg.pop(user_id, None)
+    if welcome_mid:
+        tasks.append(bot.delete_message(user_id, welcome_mid))
 
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -320,8 +328,7 @@ async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_message(
             user_id,
-            "⏳ Chat auto-closed due to 2 minutes of inactivity.\n"
-            "History has been cleared."
+            "⏳ StudyGPT stopped due to inactivity."
         )
         await asyncio.sleep(1)
         await context.bot.send_message(
@@ -339,7 +346,7 @@ async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 ADMIN_ID,
-                f"⏳ Chat with {name} auto-closed (2 min inactivity). History cleared.",
+                f"⏳ StudyGPT stopped for {name} due to inactivity. All records cleared.",
                 reply_markup=admin_panel_keyboard()
             )
         except Exception:
@@ -381,21 +388,21 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Open hidden support chat session via /chat command."""
+async def support_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Open hidden StudyGPT support session via /support command."""
     user_id = update.message.from_user.id
 
-    # store the /chat message ID so we can delete it later
-    chat_cmd_msg[user_id] = update.message.message_id
+    # store the /support message ID so we can delete it later
+    support_cmd_msg[user_id] = update.message.message_id
 
     active_users.add(user_id)
     track_contact(user_id, update.message.from_user)
 
     sent = await context.bot.send_message(
         user_id,
-        "💬 Support chat opened.\n\n"
-        "Send your message and our team will reply directly! 🚀\n\n"
-        "⏳ Auto-closes after 2 minutes of inactivity.",
+        "💬 StudyGPT support started.\n\n"
+        "Send your query and our team will reply directly! 🚀\n\n"
+        "⏳ Bot stops automatically after 2 minutes of no activity.",
         reply_markup=ReplyKeyboardMarkup(
             [["🧹 Clear History", "❌ End Chat"]], resize_keyboard=True
         )
@@ -599,7 +606,7 @@ async def admin_open_chat(update, context, target_user_id: int):
         f"💬 Now chatting with: {name} {uname}\n"
         f"🆔 {target_user_id}  |  {status}\n\n"
         f"Just type or send anything — it goes straight to them.\n"
-        f"Swipe-reply any forwarded message for a quoted reply.",
+        f"Swipe-reply any forwarded item for a quoted reply.",
         reply_markup=admin_chat_keyboard()
     )
 
@@ -616,7 +623,14 @@ async def admin_clear_history(update, context):
     if not uid:
         return
     await delete_all_messages(context.bot, uid)
-    await update.message.reply_text("🧹 Chat history cleared!", reply_markup=admin_chat_keyboard())
+    try:
+        m = await context.bot.send_message(
+            uid,
+            "StudyGPT:  Welcome Back!!\n\nAre you ready for a new study session?"
+        )
+        welcome_msg[uid] = m.message_id
+    except Exception:
+        pass
 
 
 async def admin_end_chat(update, context):
@@ -628,7 +642,7 @@ async def admin_end_chat(update, context):
         if uid in user_timers:
             user_timers[uid].cancel()
         try:
-            await context.bot.send_message(uid, "❌ Admin ended the chat session.")
+            await context.bot.send_message(uid, "⛔ StudyGPT support has been stopped.")
             await asyncio.sleep(0.5)
             await context.bot.send_message(uid, "🚀 StudyGPT — Choose your class 👇",
                                            reply_markup=main_menu_keyboard())
@@ -637,7 +651,7 @@ async def admin_end_chat(update, context):
 
     admin_active_user = None
     context.user_data.clear()
-    await update.message.reply_text("✅ Chat ended.", reply_markup=admin_panel_keyboard())
+    await update.message.reply_text("Admin Panel 👨‍💻", reply_markup=admin_panel_keyboard())
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -750,7 +764,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── USER: CLEAR HISTORY ────────────────────────────────────────────────────
     if text == "🧹 Clear History" and user_id in active_users:
         await delete_all_messages(context.bot, user_id)
-        await msg.reply_text("🧹 History cleared!")
+        m = await msg.reply_text("StudyGPT:  Welcome Back!!\n\nAre you ready for a new study session?")
+        welcome_msg[user_id] = m.message_id
         reset_inactivity_timer(user_id, context)
         return
 
@@ -766,14 +781,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 info = recent_contacts.get(user_id, {})
                 await context.bot.send_message(
                     ADMIN_ID,
-                    f"❌ {info.get('name', user_id)} ended the chat.",
+                    f"⛔ {info.get("name", user_id)} stopped the StudyGPT session.",
                     reply_markup=admin_panel_keyboard()
                 )
             except Exception:
                 pass
 
-        await msg.reply_text("Chat ended & history cleared.")
-        await asyncio.sleep(1)
         await start(update, context)
         return
 
@@ -822,14 +835,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     try:
                         await context.bot.send_message(
                             ADMIN_ID,
-                            f"💬 New message from {name} {uname}\n"
+                            f"💬 New query from {name} {uname}\n"
                             f"Open 👥 Recent Contacts and tap {pos} to reply in DM."
                         )
                     except Exception:
                         pass
 
         except Exception as e:
-            await msg.reply_text(f"⚠️ Could not forward message: {e}")
+            await msg.reply_text(f"⚠️ Could not forward: {e}")
         return
 
     # ── CLASS / SUBJECT / MATERIAL NAVIGATION ─────────────────────────────────
@@ -857,7 +870,7 @@ app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("admin", admin_cmd))
-app.add_handler(CommandHandler("chat",  chat_cmd))
+app.add_handler(CommandHandler("support", support_cmd))
 app.add_handler(MessageHandler(~filters.COMMAND, handle_message))
 
 app.run_polling()
