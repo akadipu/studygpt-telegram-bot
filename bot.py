@@ -34,7 +34,6 @@ support_cmd_msg      = {}
 chat_bot_msg      = {}
 
 # {user_id: message_id} — the "Welcome Back" message to delete on end/timeout
-welcome_msg       = {}
 
 # {user_id: [message_id, ...]} — control button messages (Clear History, End Chat) to delete
 control_msgs      = {}
@@ -232,11 +231,6 @@ async def delete_all_messages(bot, user_id: int):
     if bot_mid:
         tasks.append(bot.delete_message(user_id, bot_mid))
 
-    # delete the "Welcome Back" message if present
-    welcome_mid = welcome_msg.pop(user_id, None)
-    if welcome_mid:
-        tasks.append(bot.delete_message(user_id, welcome_mid))
-
     # delete control button messages (Clear History, End Chat) from both sides
     for mid in control_msgs.pop(user_id, []):
         tasks.append(bot.delete_message(user_id, mid))
@@ -335,11 +329,6 @@ async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     active_users.discard(user_id)
 
     try:
-        await context.bot.send_message(
-            user_id,
-            "⏳ StudyGPT stopped due to inactivity."
-        )
-        await asyncio.sleep(1)
         await context.bot.send_message(
             user_id,
             "🚀 StudyGPT — Choose your class 👇",
@@ -632,14 +621,6 @@ async def admin_clear_history(update, context):
     if not uid:
         return
     await delete_all_messages(context.bot, uid)
-    try:
-        m = await context.bot.send_message(
-            uid,
-            "StudyGPT:  Welcome Back!!\n\nAre you ready for a new study session?"
-        )
-        welcome_msg[uid] = m.message_id
-    except Exception:
-        pass
 
 
 async def admin_end_chat(update, context):
@@ -774,8 +755,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🧹 Clear History" and user_id in active_users:
         control_msgs.setdefault(user_id, []).append(msg.message_id)
         await delete_all_messages(context.bot, user_id)
-        m = await msg.reply_text("StudyGPT:  Welcome Back!!\n\nAre you ready for a new study session?")
-        welcome_msg[user_id] = m.message_id
         reset_inactivity_timer(user_id, context)
         return
 
