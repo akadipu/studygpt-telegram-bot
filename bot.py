@@ -10,7 +10,6 @@ from telegram.ext import (
 
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 8558716745
-DATA_FILE = "data.json"
 MAX_RECENT = 10
 
 INACTIVITY_SECONDS = 120   # 2 minutes → auto-close
@@ -36,16 +35,166 @@ recent_contacts_order = deque(maxlen=MAX_RECENT)
 # UTILITIES
 # ══════════════════════════════════════════════════════════════════════════════
 
-def load_data():
-    try:
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    except Exception:
-        return {"categories": {}}
+# ══════════════════════════════════════════════════════════════════════════════
+# LINKS  ← Edit this to add/change links
+# Format: LINKS["Class"]["Subject"]["Material Type"] = "your link here"
+# Leave as "" if no link yet — bot will say "coming soon"
+# ══════════════════════════════════════════════════════════════════════════════
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+LINKS = {
+    "Class 9th": {
+        "SCIENCE 🧪": {
+            "📚 Lectures":       "https://your-link-here.com",
+            "📝 Notes":          "https://your-link-here.com",
+            "🧠 Mindmaps":       "https://your-link-here.com",
+            "❗ Imp Questions":  "https://your-link-here.com",
+        },
+        "MATHEMATICS 📐": {
+            "📚 Lectures":       "",
+            "📝 Notes":          "",
+            "🧠 Mindmaps":       "",
+            "❗ Imp Questions":  "",
+        },
+        "ECONOMICS 💳": {
+            "📚 Lectures":       "",
+            "📝 Notes":          "",
+            "🧠 Mindmaps":       "",
+            "❗ Imp Questions":  "",
+        },
+        "HISTORY 🏆": {
+            "📚 Lectures":       "",
+            "📝 Notes":          "",
+            "🧠 Mindmaps":       "",
+            "❗ Imp Questions":  "",
+        },
+        "POL. SCIENCE 👮": {
+            "📚 Lectures":       "",
+            "📝 Notes":          "",
+            "🧠 Mindmaps":       "",
+            "❗ Imp Questions":  "",
+        },
+        "GEOGRAPHY 🌍": {
+            "📚 Lectures":       "",
+            "📝 Notes":          "",
+            "🧠 Mindmaps":       "",
+            "❗ Imp Questions":  "",
+        },
+        "ENGLISH 📄": {
+            "📚 Lectures":       "",
+            "📝 Notes":          "",
+            "🧠 Mindmaps":       "",
+            "❗ Imp Questions":  "",
+        },
+    },
+    "Class 10th": {
+        "SCIENCE 🧪": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+        "MATHEMATICS 📐": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+        "ECONOMICS 💳": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+        "HISTORY 🏆": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+        "POL. SCIENCE 👮": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+        "GEOGRAPHY 🌍": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+        "ENGLISH 📄": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+    },
+    "Class 11th": {
+        "PHYSICS ⚛️": {
+            "📚 Lectures":       "",
+            "📝 Notes":          "",
+            "🧠 Mindmaps":       "",
+            "❗ Imp Questions":  "",
+        },
+        "CHEMISTRY 🧪": {
+            "📚 Lectures":       "",
+            "📝 Notes":          "",
+            "🧠 Mindmaps":       "",
+            "❗ Imp Questions":  "",
+        },
+        "BIOLOGY 🌱": {
+            "📚 Lectures":       "",
+            "📝 Notes":          "",
+            "🧠 Mindmaps":       "",
+            "❗ Imp Questions":  "",
+        },
+        "MATHS 📐": {
+            "📚 Lectures":       "",
+            "📝 Notes":          "",
+            "🧠 Mindmaps":       "",
+            "❗ Imp Questions":  "",
+        },
+        "ENGLISH 📄": {
+            "📚 Lectures":       "",
+            "📝 Notes":          "",
+            "🧠 Mindmaps":       "",
+            "❗ Imp Questions":  "",
+        },
+    },
+    "Class 12th": {
+        "PHYSICS ⚛️": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+        "CHEMISTRY 🧪": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+        "BIOLOGY 🌱": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+        "MATHS 📐": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+        "ENGLISH 📄": {
+            "📚 Lectures":  "",
+            "📝 Notes":     "",
+            "🧠 Mindmaps":  "",
+            "📄 PYQs":      "",
+        },
+    },
+}
 
 async def delete_all_messages(bot, user_id: int):
     """Delete all bridged messages for user_id from both sides instantly using gather."""
@@ -97,23 +246,18 @@ def main_menu_keyboard():
 
 def admin_panel_keyboard():
     return ReplyKeyboardMarkup(
-        [["➕ Add Material",   "❌ Delete Material"],
-         ["📋 List Materials", "🚪 Exit Admin Mode"],
+        [["🚪 Exit Admin Mode"],
          ["👥 Recent Contacts"]],
         resize_keyboard=True
     )
 
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # DELIVERED / READ STATUS
-# After user sends a message → show "✅ Delivered"
-# When admin opens DM with that user → upgrade to "👀 Seen by Admin  HH:MM"
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def set_delivered(bot, user_id: int):
     """Post (or replace) the status bubble in the user's chat with ✅ Delivered."""
-    # delete previous status bubble if exists
     old = user_status_msg.pop(user_id, None)
     if old:
         try:
@@ -144,12 +288,9 @@ async def set_seen(bot, user_id: int):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INACTIVITY AUTO-CLOSE  (2 minutes)
-# Restarted every time either side sends a message.
-# If neither side sends anything for 2 min → clear history + close session.
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """Wait INACTIVITY_SECONDS then auto-close and clear the chat."""
     await asyncio.sleep(INACTIVITY_SECONDS)
 
     if user_id not in active_users:
@@ -157,12 +298,9 @@ async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
 
     global admin_active_user
 
-    # delete all bridged messages instantly
     await delete_all_messages(context.bot, user_id)
-
     active_users.discard(user_id)
 
-    # notify user
     try:
         await context.bot.send_message(
             user_id,
@@ -178,7 +316,6 @@ async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    # notify admin
     if admin_active_user == user_id:
         admin_active_user = None
         info = recent_contacts.get(user_id, {})
@@ -194,7 +331,6 @@ async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
 
 
 def reset_inactivity_timer(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel existing timer and start a fresh one."""
     if user_id in user_timers:
         user_timers[user_id].cancel()
     user_timers[user_id] = asyncio.create_task(
@@ -278,37 +414,35 @@ async def show_materials(update, context):
 
 
 async def show_content(update, context):
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
     cls      = context.user_data.get("class")
     subject  = context.user_data.get("subject")
     mat_type = context.user_data.get("material_type")
     context.user_data["last"] = "material"
 
-    data  = load_data()
-    key   = f"{cls}|{subject}|{mat_type}"
-    items = data.get("categories", {}).get(key, [])
     back_kb = ReplyKeyboardMarkup([["⬅ Back", "🏠 Main Menu"]], resize_keyboard=True)
 
-    if not items:
+    link = LINKS.get(cls, {}).get(subject, {}).get(mat_type, "")
+
+    if not link:
         await update.message.reply_text(
-            f"📭 No {mat_type} found for {subject} ({cls}) yet.\n\nCheck back later!",
+            f"⏳ {mat_type} for {subject} ({cls}) is coming soon!\n\nCheck back later.",
             reply_markup=back_kb
         )
         return
 
     await update.message.reply_text(
-        f"📦 {mat_type} — {subject} ({cls}):\nSending {len(items)} item(s)...",
+        f"📂 {subject} ({cls})\n{mat_type}",
         reply_markup=back_kb
     )
-    for item in items:
-        try:
-            t, fi, cp = item["type"], item["file_id"], item.get("caption", "")
-            if   t == "text":     await update.message.reply_text(fi)
-            elif t == "photo":    await update.message.reply_photo(photo=fi, caption=cp)
-            elif t == "document": await update.message.reply_document(document=fi, caption=cp)
-            elif t == "video":    await update.message.reply_video(video=fi, caption=cp)
-            elif t == "audio":    await update.message.reply_audio(audio=fi, caption=cp)
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Could not send item: {e}")
+    await update.message.reply_text(
+        f"Tap below to open 👇",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton(f"Open {mat_type} 🔗", url=link)]]
+        )
+    )
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -375,7 +509,7 @@ async def forward_any(bot, to_chat: int, msg,
 async def admin_show_recent(update, context):
     if not recent_contacts_order:
         await update.message.reply_text("📭 No recent contacts yet.",
-                                         reply_markup=admin_panel_keyboard())
+                                        reply_markup=admin_panel_keyboard())
         return
 
     context.user_data["admin_mode"] = "pick_recent"
@@ -384,10 +518,10 @@ async def admin_show_recent(update, context):
 
     lines = ["👥 Recent Contacts — send a number to open DM:\n"]
     for i, uid in enumerate(ids_list, 1):
-        info      = recent_contacts.get(uid, {})
-        name      = info.get("name", "Unknown")
-        uname     = info.get("username", "")
-        online    = "🟢" if uid in active_users else "🔴"
+        info   = recent_contacts.get(uid, {})
+        name   = info.get("name", "Unknown")
+        uname  = info.get("username", "")
+        online = "🟢" if uid in active_users else "🔴"
         lines.append(f"{i}. {online} {name} {uname}  [ID: {uid}]")
 
     kb = [[str(i)] for i in range(1, len(ids_list) + 1)] + [["🛑 Exit to Panel"]]
@@ -398,7 +532,6 @@ async def admin_show_recent(update, context):
 
 
 async def admin_open_chat(update, context, target_user_id: int):
-    """Put admin into DM mode AND mark all pending messages as seen."""
     global admin_active_user
     admin_active_user = target_user_id
     context.user_data["admin_mode"] = "live_chat"
@@ -416,10 +549,8 @@ async def admin_open_chat(update, context, target_user_id: int):
         reply_markup=admin_chat_keyboard()
     )
 
-    # upgrade Delivered → Seen for this user
     await set_seen(context.bot, target_user_id)
 
-    # reset inactivity timer for both sides
     if target_user_id in active_users:
         reset_inactivity_timer(target_user_id, context)
 
@@ -543,165 +674,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text(f"⚠️ Could not send: {e}")
             return
 
-        # ── ADD MATERIAL ───────────────────────────────────────────────────────
-        if text == "➕ Add Material":
-            context.user_data.update({"admin_mode": "add", "add_step": "choose_class"})
-            kb = [[c] for c in ALL_CLASSES] + [["🛑 Exit to Panel"]]
-            await msg.reply_text("➕ Add Material\n\nStep 1️⃣ — Choose the class:",
-                                  reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
-            return
-
-        if admin_mode == "add":
-            step = context.user_data.get("add_step")
-
-            if step == "choose_class" and text in ALL_CLASSES:
-                context.user_data.update({"add_class": text, "add_step": "choose_subject"})
-                subs = get_subjects_for_class(text)
-                await msg.reply_text(f"Step 2️⃣ — Choose the subject for {text}:",
-                                      reply_markup=ReplyKeyboardMarkup([[s] for s in subs] + [["🛑 Exit to Panel"]], resize_keyboard=True))
-                return
-
-            if step == "choose_subject" and text in SUBJECTS_9_10 + SUBJECTS_11_12:
-                context.user_data.update({"add_subject": text, "add_step": "choose_type"})
-                types = get_material_types_for_class(context.user_data["add_class"])
-                await msg.reply_text("Step 3️⃣ — Choose the material type:",
-                                      reply_markup=ReplyKeyboardMarkup([[t] for t in types] + [["🛑 Exit to Panel"]], resize_keyboard=True))
-                return
-
-            if step == "choose_type" and text in MATERIAL_TYPES_9_11 + MATERIAL_TYPES_10_12:
-                context.user_data.update({"add_type": text, "add_step": "send_content"})
-                await msg.reply_text(
-                    f"Step 4️⃣ — Send the file / photo / video / audio / text to add.\n\n"
-                    f"📌 {context.user_data['add_class']} › {context.user_data['add_subject']} › {text}\n\n"
-                    f"Send content now 👇",
-                    reply_markup=ReplyKeyboardMarkup([["🛑 Exit to Panel"]], resize_keyboard=True)
-                )
-                return
-
-            if step == "send_content":
-                cls, subject, mat_type = (context.user_data["add_class"],
-                                          context.user_data["add_subject"],
-                                          context.user_data["add_type"])
-                key  = f"{cls}|{subject}|{mat_type}"
-                data = load_data()
-                data["categories"].setdefault(key, [])
-
-                if msg.text:
-                    data["categories"][key].append({"type": "text",     "file_id": msg.text,              "caption": ""})
-                elif msg.photo:
-                    data["categories"][key].append({"type": "photo",    "file_id": msg.photo[-1].file_id, "caption": msg.caption or ""})
-                elif msg.video:
-                    data["categories"][key].append({"type": "video",    "file_id": msg.video.file_id,     "caption": msg.caption or ""})
-                elif msg.document:
-                    data["categories"][key].append({"type": "document", "file_id": msg.document.file_id,  "caption": msg.caption or ""})
-                elif msg.audio:
-                    data["categories"][key].append({"type": "audio",    "file_id": msg.audio.file_id,     "caption": msg.caption or ""})
-                else:
-                    await msg.reply_text("⚠️ Unsupported type.")
-                    return
-
-                save_data(data)
-                await msg.reply_text(
-                    f"✅ Added! Total in slot: {len(data['categories'][key])}\n\n"
-                    f"Send another file to keep adding, or 🛑 Exit to Panel."
-                )
-                return
-            return
-
-        # ── DELETE MATERIAL ────────────────────────────────────────────────────
-        if text == "❌ Delete Material":
-            context.user_data.update({"admin_mode": "delete", "del_step": "choose_class"})
-            kb = [[c] for c in ALL_CLASSES] + [["🛑 Exit to Panel"]]
-            await msg.reply_text("❌ Delete Material\n\nStep 1️⃣ — Choose the class:",
-                                  reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
-            return
-
-        if admin_mode == "delete":
-            step = context.user_data.get("del_step")
-
-            if step == "choose_class" and text in ALL_CLASSES:
-                context.user_data.update({"del_class": text, "del_step": "choose_subject"})
-                subs = get_subjects_for_class(text)
-                await msg.reply_text(f"Choose the subject for {text}:",
-                                      reply_markup=ReplyKeyboardMarkup([[s] for s in subs] + [["🛑 Exit to Panel"]], resize_keyboard=True))
-                return
-
-            if step == "choose_subject" and text in SUBJECTS_9_10 + SUBJECTS_11_12:
-                context.user_data.update({"del_subject": text, "del_step": "choose_type"})
-                types = get_material_types_for_class(context.user_data["del_class"])
-                await msg.reply_text("Choose the material type:",
-                                      reply_markup=ReplyKeyboardMarkup([[t] for t in types] + [["🛑 Exit to Panel"]], resize_keyboard=True))
-                return
-
-            if step == "choose_type" and text in MATERIAL_TYPES_9_11 + MATERIAL_TYPES_10_12:
-                context.user_data.update({"del_type": text, "del_step": "choose_index"})
-                cls, subject = context.user_data["del_class"], context.user_data["del_subject"]
-                key   = f"{cls}|{subject}|{text}"
-                items = load_data().get("categories", {}).get(key, [])
-                if not items:
-                    await msg.reply_text(f"📭 No items in {cls} › {subject} › {text}.",
-                                          reply_markup=ReplyKeyboardMarkup([["🛑 Exit to Panel"]], resize_keyboard=True))
-                    return
-                lines = [f"📦 {cls} › {subject} › {text}\n\nItems ({len(items)}):\n"]
-                for i, item in enumerate(items):
-                    cap = item.get("caption") or item.get("file_id", "")[:40]
-                    lines.append(f"{i+1}. [{item['type']}] {cap}")
-                lines.append("\nSend the item number to delete:")
-                await msg.reply_text("\n".join(lines),
-                                      reply_markup=ReplyKeyboardMarkup([["🛑 Exit to Panel"]], resize_keyboard=True))
-                return
-
-            if step == "choose_index":
-                cls, subject, mat_type = (context.user_data["del_class"],
-                                          context.user_data["del_subject"],
-                                          context.user_data["del_type"])
-                key   = f"{cls}|{subject}|{mat_type}"
-                data  = load_data()
-                items = data["categories"].get(key, [])
-                if text.isdigit():
-                    idx = int(text) - 1
-                    if 0 <= idx < len(items):
-                        items.pop(idx)
-                        data["categories"][key] = items
-                        save_data(data)
-                        await msg.reply_text(f"🗑️ Item #{idx+1} deleted. Remaining: {len(items)}",
-                                              reply_markup=ReplyKeyboardMarkup([["🛑 Exit to Panel"]], resize_keyboard=True))
-                    else:
-                        await msg.reply_text(f"⚠️ Enter a number 1–{len(items)}.")
-                else:
-                    await msg.reply_text("⚠️ Please send a number.")
-                return
-            return
-
-        # ── LIST MATERIALS ─────────────────────────────────────────────────────
-        if text == "📋 List Materials":
-            context.user_data.update({"admin_mode": "list", "list_step": "choose_class"})
-            kb = [[c] for c in ALL_CLASSES] + [["🛑 Exit to Panel"]]
-            await msg.reply_text("📋 List Materials\n\nChoose the class:",
-                                  reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
-            return
-
-        if admin_mode == "list":
-            step = context.user_data.get("list_step")
-            if step == "choose_class" and text in ALL_CLASSES:
-                context.user_data.update({"list_class": text, "list_step": "choose_subject"})
-                subs = get_subjects_for_class(text)
-                await msg.reply_text(f"Choose the subject for {text}:",
-                                      reply_markup=ReplyKeyboardMarkup([[s] for s in subs] + [["🛑 Exit to Panel"]], resize_keyboard=True))
-                return
-            if step == "choose_subject" and text in SUBJECTS_9_10 + SUBJECTS_11_12:
-                cls   = context.user_data["list_class"]
-                data  = load_data()
-                types = get_material_types_for_class(cls)
-                lines = [f"📋 {cls} › {text}\n"]
-                for t in types:
-                    count = len(data.get("categories", {}).get(f"{cls}|{text}|{t}", []))
-                    lines.append(f"  {t}: {count} item(s)")
-                await msg.reply_text("\n".join(lines),
-                                      reply_markup=ReplyKeyboardMarkup([["🛑 Exit to Panel"]], resize_keyboard=True))
-                return
-            return
-
     # ══════════════════════════════════════════════════════════════════════════
     # USER SIDE  (also reached by admin in user/study mode)
     # ══════════════════════════════════════════════════════════════════════════
@@ -733,7 +705,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         )
 
-        # Notify admin
         info  = recent_contacts.get(user_id, {})
         name  = info.get("name", str(user_id))
         uname = info.get("username", "")
@@ -782,7 +753,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── ACTIVE CONTACT-US CHAT: forward user → admin ───────────────────────────
     if user_id in active_users:
-        # reset inactivity timer (user just spoke)
         reset_inactivity_timer(user_id, context)
 
         track_contact(user_id, msg.from_user)
@@ -810,15 +780,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 context.bot_data[f"admin_msg_{admin_msg.message_id}"] = user_id
 
-                # Show ✅ Delivered to user
                 await set_delivered(context.bot, user_id)
 
-                # If admin is already in DM with this user → immediately upgrade to 👀 Seen
                 if admin_active_user == user_id:
                     await asyncio.sleep(0.5)
                     await set_seen(context.bot, user_id)
                 else:
-                    # Nudge admin
                     ids_newest_first = list(reversed(recent_contacts_order))
                     try:
                         pos = ids_newest_first.index(user_id) + 1
@@ -834,9 +801,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     except Exception:
                         pass
-
-                    # Show typing indicator ONLY when admin is about to reply
-                    # (triggered from admin side in live_chat, not here)
 
         except Exception as e:
             await msg.reply_text(f"⚠️ Could not forward message: {e}")
