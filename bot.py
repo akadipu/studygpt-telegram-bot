@@ -781,7 +781,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 info = recent_contacts.get(user_id, {})
                 await context.bot.send_message(
                     ADMIN_ID,
-                    f"⛔ {info.get("name", user_id)} stopped the StudyGPT session.",
+                    f"⛔ {info.get('name', user_id)} stopped the StudyGPT session.",
                     reply_markup=admin_panel_keyboard()
                 )
             except Exception:
