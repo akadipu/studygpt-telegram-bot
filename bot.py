@@ -36,6 +36,9 @@ chat_bot_msg      = {}
 # {user_id: message_id} — the "Welcome Back" message to delete on end/timeout
 welcome_msg       = {}
 
+# {user_id: [message_id, ...]} — control button messages (Clear History, End Chat) to delete
+control_msgs      = {}
+
 # ── recent contacts ────────────────────────────────────────────────────────────
 recent_contacts       = {}
 recent_contacts_order = deque(maxlen=MAX_RECENT)
@@ -233,6 +236,12 @@ async def delete_all_messages(bot, user_id: int):
     welcome_mid = welcome_msg.pop(user_id, None)
     if welcome_mid:
         tasks.append(bot.delete_message(user_id, welcome_mid))
+
+    # delete control button messages (Clear History, End Chat) from both sides
+    for mid in control_msgs.pop(user_id, []):
+        tasks.append(bot.delete_message(user_id, mid))
+    for mid in control_msgs.pop(-user_id, []):   # admin side stored as negative id
+        tasks.append(bot.delete_message(ADMIN_ID, mid))
 
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -642,8 +651,6 @@ async def admin_end_chat(update, context):
         if uid in user_timers:
             user_timers[uid].cancel()
         try:
-            await context.bot.send_message(uid, "⛔ StudyGPT support has been stopped.")
-            await asyncio.sleep(0.5)
             await context.bot.send_message(uid, "🚀 StudyGPT — Choose your class 👇",
                                            reply_markup=main_menu_keyboard())
         except Exception:
@@ -690,10 +697,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # ── LIVE CHAT CONTROLS ─────────────────────────────────────────────────
         if text == "🧹 Clear History" and admin_active_user:
+            control_msgs.setdefault(-admin_active_user, []).append(msg.message_id)
             await admin_clear_history(update, context)
             return
 
         if text == "❌ End Chat" and admin_active_user:
+            control_msgs.setdefault(-admin_active_user, []).append(msg.message_id)
             await admin_end_chat(update, context)
             return
 
@@ -763,6 +772,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── USER: CLEAR HISTORY ────────────────────────────────────────────────────
     if text == "🧹 Clear History" and user_id in active_users:
+        control_msgs.setdefault(user_id, []).append(msg.message_id)
         await delete_all_messages(context.bot, user_id)
         m = await msg.reply_text("StudyGPT:  Welcome Back!!\n\nAre you ready for a new study session?")
         welcome_msg[user_id] = m.message_id
@@ -771,6 +781,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── USER: END CHAT ─────────────────────────────────────────────────────────
     if text == "❌ End Chat" and user_id in active_users:
+        control_msgs.setdefault(user_id, []).append(msg.message_id)
         await delete_all_messages(context.bot, user_id)
         active_users.discard(user_id)
         if user_id in user_timers:
