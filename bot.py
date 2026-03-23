@@ -539,15 +539,11 @@ SUBJECTS_11_12       = ["PHYSICS ⚛️", "CHEMISTRY 🧪", "BIOLOGY 🌱", "MAT
 MATERIAL_TYPES_9_11  = ["📚 Lectures", "📝 Notes", "🧠 Mindmaps", "❗ Imp Questions"]
 MATERIAL_TYPES_10_12 = ["📚 Lectures", "📝 Notes", "🧠 Mindmaps", "📄 PYQs"]
 
-def get_subjects_for_class(cls):
-    return SUBJECTS_9_10 if cls in ["Class 9th", "Class 10th"] else SUBJECTS_11_12
-
-def get_material_types_for_class(cls):
-    return MATERIAL_TYPES_9_11 if cls in ["Class 9th", "Class 11th"] else MATERIAL_TYPES_10_12
-
-
 async def show_subjects(update, context):
     cls = context.user_data.get("class")
+    if not cls:
+        await start(update, context)
+        return
     if cls in ["Class 9th", "Class 10th"]:
         kb = [["SCIENCE 🧪", "MATHEMATICS 📐"], ["ECONOMICS 💳", "HISTORY 🏆"],
               ["POL. SCIENCE 👮", "GEOGRAPHY 🌍"], ["ENGLISH 📄"]]
@@ -564,6 +560,9 @@ async def show_subjects(update, context):
 async def show_materials(update, context):
     cls     = context.user_data.get("class")
     subject = context.user_data.get("subject")
+    if not cls or not subject:
+        await start(update, context)
+        return
     if cls in ["Class 9th", "Class 11th"]:
         kb = [["📚 Lectures", "📝 Notes"], ["🧠 Mindmaps", "❗ Imp Questions"]]
     else:
@@ -614,19 +613,30 @@ async def show_content(update, context):
 
 async def forward_any(bot, to_chat: int, msg,
                       caption_prefix: str = "",
-                      reply_to_message_id: int = None):
+                      reply_to_message_id: int = None,
+                      owner_user_id: int = None):
+    """Forward any message type to to_chat.
+    owner_user_id: the user_id whose session this belongs to, used to track orphan prefix messages."""
     kw = {}
     if reply_to_message_id:
         kw["reply_to_message_id"] = reply_to_message_id
 
     cp = (caption_prefix + "\n\n" + (msg.caption or "")).strip() if caption_prefix else (msg.caption or "")
 
+    def track_prefix(prefix_msg):
+        """Store orphan prefix message so it gets deleted on clear."""
+        if owner_user_id:
+            if to_chat == ADMIN_ID:
+                control_msgs.setdefault(-owner_user_id, []).append(prefix_msg.message_id)
+            else:
+                control_msgs.setdefault(owner_user_id, []).append(prefix_msg.message_id)
+
     if msg.text:
         body = (caption_prefix + "\n\n" + msg.text).strip() if caption_prefix else msg.text
         return await bot.send_message(to_chat, body, **kw)
     if msg.sticker:
         if caption_prefix:
-            await bot.send_message(to_chat, caption_prefix, **kw)
+            track_prefix(await bot.send_message(to_chat, caption_prefix, **kw))
         return await bot.send_sticker(to_chat, sticker=msg.sticker.file_id)
     if msg.animation:
         return await bot.send_animation(to_chat, animation=msg.animation.file_id,
@@ -639,7 +649,7 @@ async def forward_any(bot, to_chat: int, msg,
                                     caption=cp or None, **kw)
     if msg.video_note:
         if caption_prefix:
-            await bot.send_message(to_chat, caption_prefix, **kw)
+            track_prefix(await bot.send_message(to_chat, caption_prefix, **kw))
         return await bot.send_video_note(to_chat, video_note=msg.video_note.file_id)
     if msg.voice:
         return await bot.send_voice(to_chat, voice=msg.voice.file_id,
@@ -652,13 +662,13 @@ async def forward_any(bot, to_chat: int, msg,
                                        caption=cp or None, **kw)
     if msg.location:
         if caption_prefix:
-            await bot.send_message(to_chat, caption_prefix, **kw)
+            track_prefix(await bot.send_message(to_chat, caption_prefix, **kw))
         return await bot.send_location(to_chat,
                                        latitude=msg.location.latitude,
                                        longitude=msg.location.longitude)
     if msg.contact:
         if caption_prefix:
-            await bot.send_message(to_chat, caption_prefix, **kw)
+            track_prefix(await bot.send_message(to_chat, caption_prefix, **kw))
         return await bot.send_contact(to_chat,
                                       phone_number=msg.contact.phone_number,
                                       first_name=msg.contact.first_name)
@@ -757,6 +767,9 @@ async def admin_end_chat(update, context):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global admin_active_user
 
+    if not update.message:
+        return
+
     msg     = update.message
     user_id = msg.from_user.id
     text    = msg.text or ""
@@ -822,16 +835,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_to_in_user_chat = None
             if msg.reply_to_message:
                 replied_admin_id = msg.reply_to_message.message_id
+                found = False
                 for user_msg_id, admin_msg_id in chat_messages.get(target, []):
                     if admin_msg_id == replied_admin_id:
                         reply_to_in_user_chat = user_msg_id
+                        found = True
                         break
+                if not found:
+                    await msg.reply_text("⚠️ That message was already cleared and can't be quoted.")
+                    return
 
             try:
                 sent = await forward_any(
                     context.bot, target, msg,
                     caption_prefix="",
-                    reply_to_message_id=reply_to_in_user_chat
+                    reply_to_message_id=reply_to_in_user_chat,
+                    owner_user_id=target
                 )
                 if sent:
                     chat_messages.setdefault(target, []).append(
@@ -860,32 +879,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ── USER: CLEAR HISTORY ────────────────────────────────────────────────────
-    if text == "🧹 Clear History" and user_id in active_users:
-        control_msgs.setdefault(user_id, []).append(msg.message_id)
-        await delete_all_messages(context.bot, user_id)
-        reset_inactivity_timer(user_id, context)
-        start_auto_clear(user_id, context)
+    if text == "🧹 Clear History":
+        if user_id in active_users:
+            control_msgs.setdefault(user_id, []).append(msg.message_id)
+            await delete_all_messages(context.bot, user_id)
+            reset_inactivity_timer(user_id, context)
+            start_auto_clear(user_id, context)
+        else:
+            # user has support keyboard but no active session (e.g. after bot restart)
+            await start(update, context)
         return
 
     # ── USER: END CHAT ─────────────────────────────────────────────────────────
-    if text == "❌ End Chat" and user_id in active_users:
-        control_msgs.setdefault(user_id, []).append(msg.message_id)
-        await delete_all_messages(context.bot, user_id)
-        active_users.discard(user_id)
-        stop_auto_clear(user_id)
-        if user_id in user_timers:
-            user_timers[user_id].cancel()
+    if text == "❌ End Chat":
+        if user_id in active_users:
+            control_msgs.setdefault(user_id, []).append(msg.message_id)
+            await delete_all_messages(context.bot, user_id)
+            active_users.discard(user_id)
+            stop_auto_clear(user_id)
+            if user_id in user_timers:
+                user_timers[user_id].cancel()
 
-        if admin_active_user == user_id:
-            try:
-                info = recent_contacts.get(user_id, {})
-                await context.bot.send_message(
-                    ADMIN_ID,
-                    f"⛔ {info.get('name', user_id)} stopped the StudyGPT session.",
-                    reply_markup=admin_panel_keyboard()
-                )
-            except Exception:
-                pass
+            if admin_active_user == user_id:
+                try:
+                    info = recent_contacts.get(user_id, {})
+                    await context.bot.send_message(
+                        ADMIN_ID,
+                        f"⛔ {info.get('name', user_id)} stopped the StudyGPT session.",
+                        reply_markup=admin_panel_keyboard()
+                    )
+                except Exception:
+                    pass
+        else:
+            # user has support keyboard but no active session (e.g. after bot restart)
+            pass
 
         await start(update, context)
         return
@@ -902,16 +929,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_to_admin_id = None
         if msg.reply_to_message:
             replied_user_side_id = msg.reply_to_message.message_id
+            found = False
             for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
                 if user_msg_id == replied_user_side_id:
                     reply_to_admin_id = admin_msg_id
+                    found = True
                     break
+            if not found:
+                await msg.reply_text("⚠️ That message was already cleared and can't be quoted.")
+                return
 
         try:
             admin_msg = await forward_any(
                 context.bot, ADMIN_ID, msg,
                 caption_prefix=prefix,
-                reply_to_message_id=reply_to_admin_id
+                reply_to_message_id=reply_to_admin_id,
+                owner_user_id=user_id
             )
             if admin_msg:
                 chat_messages.setdefault(user_id, []).append(
