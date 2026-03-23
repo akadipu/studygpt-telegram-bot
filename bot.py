@@ -920,23 +920,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     first_msg_sent.add(user_id)
                     await set_delivered(context.bot, user_id)
 
-                if admin_active_user != user_id:
-                    ids_newest_first = list(reversed(recent_contacts_order))
-                    try:
-                        pos = ids_newest_first.index(user_id) + 1
-                    except ValueError:
-                        pos = "?"
-                    name  = info.get("name", str(user_id))
-                    uname = info.get("username", "")
-                    try:
-                        await context.bot.send_message(
-                            ADMIN_ID,
-                            f"💬 New query from {name} {uname}\n"
-                            f"Open 👥 Recent Contacts and tap {pos} to reply in DM."
-                        )
-                    except Exception:
-                        pass
-
         except Exception as e:
             await msg.reply_text(f"⚠️ Could not forward: {e}")
         return
