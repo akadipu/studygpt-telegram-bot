@@ -13,10 +13,12 @@ ADMIN_ID = 8558716745
 MAX_RECENT = 10
 
 INACTIVITY_SECONDS = 120   # 2 minutes → auto-close
+AUTO_CLEAR_SECONDS = 100   # auto clear history every 100 seconds
 
 # ── runtime state ──────────────────────────────────────────────────────────────
 active_users      = set()
 user_timers       = {}
+user_clear_tasks  = {}     # {user_id: asyncio.Task} — periodic auto-clear tasks
 chat_messages     = {}
 admin_active_user = None
 
@@ -209,7 +211,7 @@ LINKS = {
 }
 
 async def delete_all_messages(bot, user_id: int):
-    """Delete all bridged messages for user_id from both sides instantly using gather."""
+    """Delete ALL bridged messages for user_id from both sides (used for manual clear & session end)."""
     pairs = chat_messages.get(user_id, [])
     tasks = []
     for user_msg_id, admin_msg_id in pairs:
@@ -241,6 +243,49 @@ async def delete_all_messages(bot, user_id: int):
         await asyncio.gather(*tasks, return_exceptions=True)
     chat_messages[user_id] = []
     first_msg_sent.discard(user_id)
+
+
+KEEP_LAST = 5   # number of most-recent message pairs to preserve during auto-clear
+
+async def delete_messages_keep_recent(bot, user_id: int):
+    """Auto-clear: same as delete_all_messages but keeps the last KEEP_LAST chat pairs."""
+    pairs = chat_messages.get(user_id, [])
+    to_delete = pairs[:-KEEP_LAST] if len(pairs) > KEEP_LAST else []
+    keep      = pairs[-KEEP_LAST:] if len(pairs) > KEEP_LAST else pairs
+
+    tasks = []
+
+    # delete older message pairs only
+    for user_msg_id, admin_msg_id in to_delete:
+        tasks.append(bot.delete_message(user_id, user_msg_id))
+        tasks.append(bot.delete_message(ADMIN_ID, admin_msg_id))
+
+    # delete status bubble if present
+    status_mid = user_status_msg.pop(user_id, None)
+    if status_mid:
+        tasks.append(bot.delete_message(user_id, status_mid))
+
+    # delete the /support command message if present
+    cmd_mid = support_cmd_msg.pop(user_id, None)
+    if cmd_mid:
+        tasks.append(bot.delete_message(user_id, cmd_mid))
+
+    # delete the bot's reply to /support if present
+    bot_mid = chat_bot_msg.pop(user_id, None)
+    if bot_mid:
+        tasks.append(bot.delete_message(user_id, bot_mid))
+
+    # delete control button messages (Clear History, End Chat) from both sides
+    for mid in control_msgs.pop(user_id, []):
+        tasks.append(bot.delete_message(user_id, mid))
+    for mid in control_msgs.pop(-user_id, []):
+        tasks.append(bot.delete_message(ADMIN_ID, mid))
+
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    chat_messages[user_id] = keep   # retain the recent pairs in state
+    # Note: first_msg_sent is NOT discarded — session is still active
 
 
 async def set_delivered(bot, user_id: int):
@@ -327,6 +372,7 @@ async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
 
     await delete_all_messages(context.bot, user_id)
     active_users.discard(user_id)
+    stop_auto_clear(user_id)
 
     try:
         await context.bot.send_message(
@@ -360,6 +406,37 @@ def reset_inactivity_timer(user_id: int, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# AUTO CLEAR HISTORY  (every 100 seconds while session is active)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def auto_clear_loop(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """Repeatedly clear old chat history every AUTO_CLEAR_SECONDS, keeping last 5 pairs."""
+    try:
+        while user_id in active_users:
+            await asyncio.sleep(AUTO_CLEAR_SECONDS)
+            if user_id not in active_users:
+                break
+            await delete_messages_keep_recent(context.bot, user_id)
+    except asyncio.CancelledError:
+        pass
+
+
+def start_auto_clear(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """Start (or restart) the auto-clear loop for a user."""
+    stop_auto_clear(user_id)
+    user_clear_tasks[user_id] = asyncio.create_task(
+        auto_clear_loop(user_id, context)
+    )
+
+
+def stop_auto_clear(user_id: int):
+    """Cancel the auto-clear loop for a user if running."""
+    task = user_clear_tasks.pop(user_id, None)
+    if task:
+        task.cancel()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # START
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -387,10 +464,37 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def support_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Open hidden StudyGPT support session via /support command."""
+    """Open hidden StudyGPT support session via /support command.
+    If a session is already active, close it cleanly first then start a fresh one."""
+    global admin_active_user
     user_id = update.message.from_user.id
 
-    # store the /support message ID so we can delete it later
+    # ── if session already active: end it cleanly before starting fresh ────────
+    if user_id in active_users:
+        # cancel timers
+        if user_id in user_timers:
+            user_timers[user_id].cancel()
+        stop_auto_clear(user_id)
+
+        # wipe all messages
+        await delete_all_messages(context.bot, user_id)
+
+        active_users.discard(user_id)
+
+        # notify admin the previous session closed
+        if admin_active_user == user_id:
+            admin_active_user = None
+            info = recent_contacts.get(user_id, {})
+            try:
+                await context.bot.send_message(
+                    ADMIN_ID,
+                    f"🔄 {info.get('name', user_id)} restarted the session. Previous chat cleared.",
+                    reply_markup=admin_panel_keyboard()
+                )
+            except Exception:
+                pass
+
+    # ── store the /support message ID so we can delete it later ───────────────
     support_cmd_msg[user_id] = update.message.message_id
 
     active_users.add(user_id)
@@ -422,6 +526,7 @@ async def support_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     reset_inactivity_timer(user_id, context)
+    start_auto_clear(user_id, context)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -763,6 +868,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         control_msgs.setdefault(user_id, []).append(msg.message_id)
         await delete_all_messages(context.bot, user_id)
         active_users.discard(user_id)
+        stop_auto_clear(user_id)
         if user_id in user_timers:
             user_timers[user_id].cancel()
 
