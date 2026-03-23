@@ -1,5 +1,4 @@
 import os
-import json
 import asyncio
 from collections import deque
 from telegram import Update, ReplyKeyboardMarkup
@@ -726,6 +725,9 @@ async def admin_clear_history(update, context):
     if not uid:
         return
     await delete_all_messages(context.bot, uid)
+    if uid in active_users:
+        reset_inactivity_timer(uid, context)
+        start_auto_clear(uid, context)
 
 
 async def admin_end_chat(update, context):
@@ -734,6 +736,7 @@ async def admin_end_chat(update, context):
     if uid:
         await delete_all_messages(context.bot, uid)
         active_users.discard(uid)
+        stop_auto_clear(uid)
         if uid in user_timers:
             user_timers[uid].cancel()
         try:
@@ -861,6 +864,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         control_msgs.setdefault(user_id, []).append(msg.message_id)
         await delete_all_messages(context.bot, user_id)
         reset_inactivity_timer(user_id, context)
+        start_auto_clear(user_id, context)
         return
 
     # ── USER: END CHAT ─────────────────────────────────────────────────────────
