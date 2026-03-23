@@ -31,10 +31,10 @@ user_status_msg   = {}
 # {user_id: message_id} — the /support command message to delete on session end
 support_cmd_msg      = {}
 
-# {user_id: message_id} — the bot's reply to /support to delete on session end
+# {user_id: message_id} — the bot's reply to /support (carries the support keyboard)
+# ⚠️ Only delete this on TRUE session end (inactivity, End Chat, admin_end_chat)
+# Never delete during auto-clear or manual Clear History — it would blank the keyboard
 chat_bot_msg      = {}
-
-# {user_id: message_id} — the "Welcome Back" message to delete on end/timeout
 
 # {user_id: [message_id, ...]} — control button messages (Clear History, End Chat) to delete
 control_msgs      = {}
@@ -209,8 +209,25 @@ LINKS = {
     },
 }
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DELETE HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _delete_chat_bot_msg(bot, user_id: int):
+    """Delete the /support welcome message (keyboard carrier). Call only on true session end."""
+    bot_mid = chat_bot_msg.pop(user_id, None)
+    if bot_mid:
+        try:
+            await bot.delete_message(user_id, bot_mid)
+        except Exception:
+            pass
+
+
 async def delete_all_messages(bot, user_id: int):
-    """Delete ALL bridged messages for user_id from both sides (used for manual clear & session end)."""
+    """Delete ALL bridged messages for user_id from both sides.
+    Used for manual Clear History AND as a helper before session end.
+    Does NOT delete chat_bot_msg — call _delete_chat_bot_msg separately on true session end."""
     pairs = chat_messages.get(user_id, [])
     tasks = []
     for user_msg_id, admin_msg_id in pairs:
@@ -227,10 +244,9 @@ async def delete_all_messages(bot, user_id: int):
     if cmd_mid:
         tasks.append(bot.delete_message(user_id, cmd_mid))
 
-    # delete the bot's reply to /support if present
-    bot_mid = chat_bot_msg.pop(user_id, None)
-    if bot_mid:
-        tasks.append(bot.delete_message(user_id, bot_mid))
+    # NOTE: chat_bot_msg is intentionally NOT deleted here.
+    # It carries the support keyboard and must stay alive for the full session.
+    # Only _delete_chat_bot_msg() removes it, called exclusively on true session end.
 
     # delete control button messages (Clear History, End Chat) from both sides
     for mid in control_msgs.pop(user_id, []):
@@ -247,7 +263,8 @@ async def delete_all_messages(bot, user_id: int):
 KEEP_LAST = 5   # number of most-recent message pairs to preserve during auto-clear
 
 async def delete_messages_keep_recent(bot, user_id: int):
-    """Auto-clear: same as delete_all_messages but keeps the last KEEP_LAST chat pairs."""
+    """Auto-clear: delete older chat pairs but keep the last KEEP_LAST.
+    Does NOT delete chat_bot_msg — keyboard must stay visible during session."""
     pairs = chat_messages.get(user_id, [])
     to_delete = pairs[:-KEEP_LAST] if len(pairs) > KEEP_LAST else []
     keep      = pairs[-KEEP_LAST:] if len(pairs) > KEEP_LAST else pairs
@@ -269,10 +286,8 @@ async def delete_messages_keep_recent(bot, user_id: int):
     if cmd_mid:
         tasks.append(bot.delete_message(user_id, cmd_mid))
 
-    # delete the bot's reply to /support if present
-    bot_mid = chat_bot_msg.pop(user_id, None)
-    if bot_mid:
-        tasks.append(bot.delete_message(user_id, bot_mid))
+    # NOTE: chat_bot_msg is intentionally NOT deleted here.
+    # Deleting it blanks the keyboard on the user's side.
 
     # delete control button messages (Clear History, End Chat) from both sides
     for mid in control_msgs.pop(user_id, []):
@@ -353,16 +368,12 @@ def admin_panel_keyboard():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DELIVERED / READ STATUS
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # INACTIVITY AUTO-CLOSE  (2 minutes)
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.sleep(INACTIVITY_SECONDS)
+    user_timers.pop(user_id, None)   # ✅ clean up own key — safe unconditional pop
 
     if user_id not in active_users:
         return
@@ -370,6 +381,7 @@ async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     global admin_active_user
 
     await delete_all_messages(context.bot, user_id)
+    await _delete_chat_bot_msg(context.bot, user_id)   # ✅ true session end — delete keyboard carrier
     active_users.discard(user_id)
     stop_auto_clear(user_id)
 
@@ -397,8 +409,9 @@ async def inactivity_close(user_id: int, context: ContextTypes.DEFAULT_TYPE):
 
 
 def reset_inactivity_timer(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    if user_id in user_timers:
-        user_timers[user_id].cancel()
+    task = user_timers.pop(user_id, None)   # ✅ pop + cancel, no dangling ref
+    if task:
+        task.cancel()
     user_timers[user_id] = asyncio.create_task(
         inactivity_close(user_id, context)
     )
@@ -468,15 +481,20 @@ async def support_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global admin_active_user
     user_id = update.message.from_user.id
 
+    if user_id == ADMIN_ID:   # ✅ Bug 3 fix: admin must not open a support session
+        return
+
     # ── if session already active: end it cleanly before starting fresh ────────
     if user_id in active_users:
         # cancel timers
-        if user_id in user_timers:
-            user_timers[user_id].cancel()
+        task = user_timers.pop(user_id, None)   # ✅ Bug 1 fix: pop + cancel
+        if task:
+            task.cancel()
         stop_auto_clear(user_id)
 
-        # wipe all messages
+        # wipe all messages including the old keyboard carrier
         await delete_all_messages(context.bot, user_id)
+        await _delete_chat_bot_msg(context.bot, user_id)   # ✅ clean up old keyboard carrier
 
         active_users.discard(user_id)
 
@@ -508,7 +526,7 @@ async def support_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [["🧹 Clear History", "❌ End Chat"]], resize_keyboard=True
         )
     )
-    chat_bot_msg[user_id] = sent.message_id
+    chat_bot_msg[user_id] = sent.message_id   # ← keyboard carrier: only deleted on true session end
 
     # notify admin
     info  = recent_contacts.get(user_id, {})
@@ -583,6 +601,10 @@ async def show_content(update, context):
     mat_type = context.user_data.get("material_type")
     context.user_data["last"] = "material"
 
+    if not cls or not subject or not mat_type:   # ✅ Bug 5 fix: guard against None nav state
+        await start(update, context)
+        return
+
     back_kb = ReplyKeyboardMarkup([["⬅ Back", "🏠 Main Menu"]], resize_keyboard=True)
 
     link = LINKS.get(cls, {}).get(subject, {}).get(mat_type, "")
@@ -604,7 +626,6 @@ async def show_content(update, context):
             [[InlineKeyboardButton(f"Open {mat_type} 🔗", url=link)]]
         )
     )
-
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -706,6 +727,17 @@ async def admin_show_recent(update, context):
 
 async def admin_open_chat(update, context, target_user_id: int):
     global admin_active_user
+
+    # ✅ if admin is already chatting with someone else, notify that user before switching
+    if admin_active_user and admin_active_user != target_user_id and admin_active_user in active_users:
+        try:
+            await context.bot.send_message(
+                admin_active_user,
+                "ℹ️ Support agent stepped away. Your session is still active — feel free to keep messaging!"
+            )
+        except Exception:
+            pass
+
     admin_active_user = target_user_id
     context.user_data["admin_mode"] = "live_chat"
 
@@ -735,6 +767,7 @@ async def admin_clear_history(update, context):
     if not uid:
         return
     await delete_all_messages(context.bot, uid)
+    # NOTE: chat_bot_msg NOT deleted — keyboard stays visible on user side
     if uid in active_users:
         reset_inactivity_timer(uid, context)
         start_auto_clear(uid, context)
@@ -745,10 +778,12 @@ async def admin_end_chat(update, context):
     uid = admin_active_user
     if uid:
         await delete_all_messages(context.bot, uid)
+        await _delete_chat_bot_msg(context.bot, uid)   # ✅ true session end — delete keyboard carrier
         active_users.discard(uid)
         stop_auto_clear(uid)
-        if uid in user_timers:
-            user_timers[uid].cancel()
+        task = user_timers.pop(uid, None)   # ✅ pop + cancel, no dangling ref
+        if task:
+            task.cancel()
         try:
             await context.bot.send_message(uid, "🚀 StudyGPT — Choose your class 👇",
                                            reply_markup=main_menu_keyboard())
@@ -782,6 +817,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # ── EXIT ──────────────────────────────────────────────────────────────
         if text in ("🛑 Exit to Panel", "🛑 Safe Exit", "🚪 Exit Admin Mode"):
+            # ✅ notify user if admin silently exits while session is live
+            if admin_active_user and admin_active_user in active_users:
+                try:
+                    await context.bot.send_message(
+                        admin_active_user,
+                        "ℹ️ Support agent stepped away. Your session is still active — feel free to keep messaging!"
+                    )
+                except Exception:
+                    pass
             admin_active_user = None
             context.user_data.clear()
             if text == "🚪 Exit Admin Mode":
@@ -792,6 +836,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if text == "🏠 Main Menu" and admin_mode:
+            # ✅ notify user if admin exits mid-session via Main Menu
+            if admin_active_user and admin_active_user in active_users:
+                try:
+                    await context.bot.send_message(
+                        admin_active_user,
+                        "ℹ️ Support agent stepped away. Your session is still active — feel free to keep messaging!"
+                    )
+                except Exception:
+                    pass
             admin_active_user = None
             context.user_data.clear()
             await msg.reply_text("Admin Panel 👨‍💻", reply_markup=admin_panel_keyboard())
@@ -842,8 +895,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         found = True
                         break
                 if not found:
-                    await msg.reply_text("⚠️ That message was already cleared and can't be quoted.")
-                    return
+                    # ✅ don't error — admin replied to a non-bridged msg (e.g. "Now chatting with...")
+                    # just send as a plain message without a quote
+                    reply_to_in_user_chat = None
 
             try:
                 sent = await forward_any(
@@ -856,7 +910,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_messages.setdefault(target, []).append(
                         (sent.message_id, msg.message_id)
                     )
-                    context.bot_data[f"admin_msg_{msg.message_id}"] = target
+                    context.bot_data[f"admin_msg_{msg.message_id}"] = target  # ✅ restored: track admin msg
             except Exception as e:
                 await msg.reply_text(f"⚠️ Could not send: {e}")
             return
@@ -883,6 +937,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in active_users:
             control_msgs.setdefault(user_id, []).append(msg.message_id)
             await delete_all_messages(context.bot, user_id)
+            # NOTE: chat_bot_msg NOT deleted — keyboard stays visible
             reset_inactivity_timer(user_id, context)
             start_auto_clear(user_id, context)
         else:
@@ -895,12 +950,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in active_users:
             control_msgs.setdefault(user_id, []).append(msg.message_id)
             await delete_all_messages(context.bot, user_id)
+            await _delete_chat_bot_msg(context.bot, user_id)   # ✅ true session end
             active_users.discard(user_id)
             stop_auto_clear(user_id)
-            if user_id in user_timers:
-                user_timers[user_id].cancel()
+            task = user_timers.pop(user_id, None)   # ✅ Bug 1 fix: pop + cancel, no dangling ref
+            if task:
+                task.cancel()
 
             if admin_active_user == user_id:
+                admin_active_user = None   # ✅ Bug 2 fix: clear admin's live-chat pointer
                 try:
                     info = recent_contacts.get(user_id, {})
                     await context.bot.send_message(
@@ -929,15 +987,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_to_admin_id = None
         if msg.reply_to_message:
             replied_user_side_id = msg.reply_to_message.message_id
-            found = False
-            for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
-                if user_msg_id == replied_user_side_id:
-                    reply_to_admin_id = admin_msg_id
-                    found = True
-                    break
-            if not found:
-                await msg.reply_text("⚠️ That message was already cleared and can't be quoted.")
-                return
+            # ✅ if user replied to the keyboard carrier message, treat as a plain message (no quote)
+            if replied_user_side_id != chat_bot_msg.get(user_id):
+                found = False
+                for user_msg_id, admin_msg_id in chat_messages.get(user_id, []):
+                    if user_msg_id == replied_user_side_id:
+                        reply_to_admin_id = admin_msg_id
+                        found = True
+                        break
+                if not found:
+                    await msg.reply_text("⚠️ That message was already cleared and can't be quoted.")
+                    return
 
         try:
             admin_msg = await forward_any(
@@ -950,7 +1010,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_messages.setdefault(user_id, []).append(
                     (msg.message_id, admin_msg.message_id)
                 )
-                context.bot_data[f"admin_msg_{admin_msg.message_id}"] = user_id
 
                 # show ✅ Delivered bubble only on first message of session
                 if user_id not in first_msg_sent:
