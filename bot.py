@@ -8,7 +8,7 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("TOKEN")
-ADMIN_ID = 8558716745
+ADMIN_ID = os.getenv("ADMIN_ID")
 MAX_RECENT = 10
 
 INACTIVITY_SECONDS = 120   # 2 minutes → auto-close
